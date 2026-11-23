@@ -10,7 +10,7 @@ function openSector(id) {
   const s = sectors.find((x) => x.id === id);
   if (!s) return;
   const image = document.querySelector('#detail-image');
-  image.src = `assets/${s.id}-escena.jpg?v=3`;
+  image.src = `assets/${s.id}-escena.jpg?v=4`;
   image.alt = `Concepto de empaque para ${s.name.toLowerCase()}`;
   document.querySelector('#detail-title').textContent = s.name;
   document.querySelector('#detail-text').textContent = s.text;

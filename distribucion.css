@@ -1,5 +1,5 @@
 /* Distribución de la página: bloques de color separados por zonas claras */
-.editorial main { background: #f7f5ef; }
+.editorial main { background: #F3F3F3; }
 .editorial .company, .editorial .service-strip, .editorial .catalog-feature, .editorial .discover { background: transparent; }
 
 .editorial .video-showcase,
@@ -26,8 +26,8 @@
 .editorial .seg-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
 .editorial .seg-head .section-title { margin-bottom: 0; }
 .editorial .seg-nav { display: flex; flex: none; gap: 8px; padding-bottom: 6px; }
-.editorial .seg-btn { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid #14283738; border-radius: 50%; background: transparent; color: var(--ink, #10232f); font-size: 16px; line-height: 1; cursor: pointer; transition: background-color .2s, color .2s; }
-.editorial .seg-btn:hover { background: #0f2447; color: #fff; }
+.editorial .seg-btn { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid #051C4638; border-radius: 50%; background: transparent; color: var(--ink, #051C46); font-size: 16px; line-height: 1; cursor: pointer; transition: background-color .2s, color .2s; }
+.editorial .seg-btn:hover { background: #051C46; color: #fff; }
 .editorial #segmentos .discover-grid { display: flex; align-items: flex-start; grid-template-columns: none; gap: 24px; margin-top: clamp(20px, 3vw, 36px); padding: 6px 0 26px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
 .editorial #segmentos .discover-grid::-webkit-scrollbar { display: none; }
 .editorial #segmentos .discover-grid button { flex: 0 0 calc((100% - 48px) / 3); scroll-snap-align: start; }
@@ -69,12 +69,12 @@
   margin-inline: auto;
   object-fit: contain;
 }
-.editorial .flight-contact .flight-copy { grid-column: 2; grid-row: 1; padding: 0; color: #0f2447; }
+.editorial .flight-contact .flight-copy { grid-column: 2; grid-row: 1; padding: 0; color: #051C46; }
 .editorial .flight-contact .flight-copy h2,
-.editorial .flight-contact .flight-copy h2 em { color: #0f2447; }
-.editorial .flight-contact .flight-copy p { color: #3d5270; }
-.editorial .flight-contact .flight-copy .overline { color: #0759bc; }
-.editorial .flight-contact .flight-copy .contact-caption { color: #5a6b82; }
+.editorial .flight-contact .flight-copy h2 em { color: #051C46; }
+.editorial .flight-contact .flight-copy p { color: #565656; }
+.editorial .flight-contact .flight-copy .overline { color: #051C46; }
+.editorial .flight-contact .flight-copy .contact-caption { color: #6E6E6E; }
 @media (max-width: 650px) {
   .editorial .contact-strip.flight-contact { display: block; padding: 8px 6px 0; }
   .editorial .flight-contact .flight-visual img { max-width: 360px; }
@@ -94,11 +94,11 @@
   overflow: hidden;
   border-radius: clamp(14px, 1.6vw, 24px);
 }
-.cf-frame { position: relative; aspect-ratio: 16 / 9; max-height: min(86vh, 800px); width: 100%; background: #c8102e; }
+.cf-frame { position: relative; aspect-ratio: 16 / 9; max-height: min(86vh, 800px); width: 100%; background: #D60517; }
 .cf-video { display: block; width: 100%; height: 100%; object-fit: cover; }
-.cf-controls button { background: #0f2447b8; border-color: #ffffff59; }
-.cf-controls button:hover { background: #0f2447; }
-.cf-controls .cf-sound.is-on { background: #0759bc; }
+.cf-controls button { background: #051C46b8; border-color: #ffffff59; }
+.cf-controls button:hover { background: #051C46; }
+.cf-controls .cf-sound.is-on { background: #051C46; }
 .cf-controls button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 @media (max-width: 650px) {
   .cf-controls { top: 8px; bottom: auto; right: 8px; }
@@ -113,9 +113,9 @@
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(38% 46% at 14% 62%, #0759bc26, transparent 72%),
-    radial-gradient(34% 44% at 86% 44%, #ed17351f, transparent 72%),
-    radial-gradient(30% 36% at 52% 70%, #0759bc1a, transparent 72%);
+    radial-gradient(38% 46% at 14% 62%, #051C4626, transparent 72%),
+    radial-gradient(34% 44% at 86% 44%, #D605171f, transparent 72%),
+    radial-gradient(30% 36% at 52% 70%, #051C461a, transparent 72%);
   pointer-events: none;
 }
 .editorial #segmentos .discover-grid {
@@ -129,7 +129,7 @@
   border: 1px solid #ffffffe6;
   border-radius: 30px;
   background: linear-gradient(150deg, #ffffffeb, #ffffffa6);
-  box-shadow: 0 34px 56px -30px #0f244759, 0 10px 22px -14px #0f244733, inset 0 1px 0 #fff;
+  box-shadow: 0 34px 56px -30px #051C4659, 0 10px 22px -14px #051C4633, inset 0 1px 0 #fff;
   text-align: left;
 }
 .editorial #segmentos .discover-grid button:nth-child(even) { margin-top: 40px; }
@@ -140,7 +140,7 @@
 .pro.editorial #segmentos .discover-grid button:hover,
 .editorial #segmentos .discover-grid button:hover {
   transform: translateY(-10px);
-  box-shadow: 0 46px 64px -30px #0f244773, 0 14px 26px -14px #0f24473d, inset 0 1px 0 #fff;
+  box-shadow: 0 46px 64px -30px #051C4673, 0 14px 26px -14px #051C463d, inset 0 1px 0 #fff;
 }
 .editorial #segmentos .discover-grid img { border-radius: 21px; }
 .editorial #segmentos .discover-grid span { margin: 18px 10px 14px; min-height: 0; }
@@ -152,18 +152,18 @@
   padding: 0 18px;
   border-radius: 999px;
   background: #fff;
-  box-shadow: 0 10px 18px -10px #0f244759, inset 0 1px 0 #fff;
-  color: #0f2447;
+  box-shadow: 0 10px 18px -10px #051C4659, inset 0 1px 0 #fff;
+  color: #051C46;
   transition: background-color .3s, color .3s;
 }
-.editorial #segmentos .discover-grid button:hover b { background: #ed1735; color: #fff; }
-.editorial #segmentos .discover-grid button:focus-visible { outline: 3px solid #0759bc; outline-offset: 3px; }
+.editorial #segmentos .discover-grid button:hover b { background: #D60517; color: #fff; }
+.editorial #segmentos .discover-grid button:focus-visible { outline: 3px solid #051C46; outline-offset: 3px; }
 .editorial #segmentos .seg-btn {
   border-color: #ffffffe6;
   background: linear-gradient(150deg, #ffffffeb, #ffffffa6);
-  box-shadow: 0 12px 20px -12px #0f244759, inset 0 1px 0 #fff;
+  box-shadow: 0 12px 20px -12px #051C4659, inset 0 1px 0 #fff;
 }
-.editorial #segmentos .seg-btn:hover { background: #0f2447; }
+.editorial #segmentos .seg-btn:hover { background: #051C46; }
 @media (max-width: 650px) {
   .editorial #segmentos .discover-grid { gap: 20px; margin-inline: -20px; padding: 14px 20px 60px; scroll-padding-left: 20px; }
   .editorial #segmentos .discover-grid button { flex-basis: 84%; padding: 10px 10px 16px; border-radius: 24px; }
@@ -181,8 +181,8 @@
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(36% 56% at 18% 40%, #0759bc26, transparent 72%),
-    radial-gradient(30% 50% at 46% 62%, #ed17351f, transparent 72%);
+    radial-gradient(36% 56% at 18% 40%, #051C4626, transparent 72%),
+    radial-gradient(30% 50% at 46% 62%, #D605171f, transparent 72%);
   pointer-events: none;
 }
 .editorial .company-visual {
@@ -191,10 +191,39 @@
   border: 1px solid #ffffffe6;
   border-radius: 30px;
   background: linear-gradient(150deg, #ffffffeb, #ffffffa6);
-  box-shadow: 0 34px 56px -30px #0f244759, 0 10px 22px -14px #0f244733, inset 0 1px 0 #fff;
+  box-shadow: 0 34px 56px -30px #051C4659, 0 10px 22px -14px #051C4633, inset 0 1px 0 #fff;
 }
 .editorial .company-visual img { display: block; border-radius: 21px; scale: 1; translate: none !important; }
 @media (max-width: 650px) {
   .editorial .company-visual { padding: 10px; border-radius: 24px; }
   .editorial .company-visual img { border-radius: 16px; }
+}
+
+/* Vitrina de lado a lado: el fondo atraviesa toda la pantalla y el contenido queda alineado */
+.editorial #vitrina { width: 100%; max-width: none; border-radius: 0; }
+.editorial #vitrina { --vt-pad: max(clamp(24px, 5vw, 80px), calc((100% - 1480px) / 2)); }
+.editorial #vitrina .vt-slide { padding-inline: var(--vt-pad); }
+.editorial #vitrina .vt-controls { left: var(--vt-pad); }
+@media (min-width: 761px) { .editorial #vitrina .vt-next { right: calc(var(--vt-pad) + 24px); } }
+
+/* Contacto: asesora de atención al cliente (sin el vuelo flotante de la mascota) */
+.editorial .flight-contact .flight-visual img { animation: none; filter: none; max-width: 540px; }
+.editorial .flight-contact .flight-visual img { max-width: 380px; }
+@media (max-width: 650px) { .editorial .flight-contact .flight-visual img { max-width: 260px; } }
+
+/* Asesora: arco azul detrás y corte recto al pie, sin degradado */
+.editorial .contact-strip.flight-contact { align-items: end; padding-bottom: 0; }
+.editorial .flight-contact .flight-copy { align-self: center; padding-bottom: clamp(24px, 3vw, 48px); }
+.editorial .flight-contact .flight-visual { position: relative; display: flex; justify-content: center; align-self: end; padding-top: 24px; }
+.editorial .flight-contact .flight-visual::before {
+  content: ''; position: absolute; z-index: 0; bottom: 0; left: 50%; translate: -50% 0;
+  width: min(86%, 440px); height: 80%;
+  background: #051C46; border-radius: 999px 999px 0 0;
+  box-shadow: inset 0 -6px 0 #D60517;
+}
+.editorial .flight-contact .flight-visual img { position: relative; z-index: 1; max-width: 400px; margin: 0 auto; }
+@media (max-width: 650px) {
+  .editorial .contact-strip.flight-contact { display: flex; flex-direction: column-reverse; align-items: stretch; }
+  .editorial .flight-contact .flight-visual img { max-width: 280px; }
+  .editorial .flight-contact .flight-copy { padding: 20px 10px 28px; }
 }

@@ -1,6 +1,6 @@
 /* Vitrina de empaques: un producto flotando y el fondo cambia con cada formato */
 .vt {
-  --vt-bg: #0f2447;
+  --vt-bg: #051C46;
   position: relative;
   overflow: hidden;
   height: clamp(460px, 62vh, 540px);
@@ -33,7 +33,7 @@
 .vt-kicker { margin: 0 0 12px; font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: #ffffffd0; }
 .vt-title { margin: 0 0 16px; font-size: clamp(34px, 4vw, 60px); font-weight: 700; line-height: 1.02; letter-spacing: -.035em; color: #fff; text-wrap: balance; }
 .vt-text { max-width: 38ch; margin: 0 0 20px; font-size: 16px; line-height: 1.5; color: #ffffffe6; text-wrap: pretty; }
-.vt-cta { display: inline-flex; align-items: center; gap: 12px; min-height: 46px; padding: 0 22px; border-radius: 999px; background: #fff; color: #0f2447; font-size: 14px; font-weight: 700; text-decoration: none; transition: transform .2s ease; }
+.vt-cta { display: inline-flex; align-items: center; gap: 12px; min-height: 46px; padding: 0 22px; border-radius: 999px; background: #fff; color: #051C46; font-size: 14px; font-weight: 700; text-decoration: none; transition: transform .2s ease; }
 .vt-cta:hover { transform: translateY(-2px); }
 
 .vt-figure { position: relative; align-self: stretch; height: 100%; min-height: 0; margin: 0; }
@@ -47,7 +47,7 @@
 /* Controles */
 .vt-controls { position: absolute; z-index: 3; left: clamp(24px, 5vw, 80px); bottom: 16px; display: flex; align-items: center; gap: 10px; }
 .vt-btn { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid #ffffff80; border-radius: 50%; background: transparent; color: #fff; font-size: 16px; line-height: 1; cursor: pointer; transition: background-color .2s, color .2s; }
-.vt-btn:hover { background: #fff; color: #0f2447; }
+.vt-btn:hover { background: #fff; color: #051C46; }
 .vt-dots { display: flex; gap: 2px; margin: 0 6px; padding: 0; list-style: none; }
 .vt-dots button { display: grid; place-items: center; width: 24px; height: 44px; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .vt-dots button::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: #ffffff80; transition: background-color .2s, transform .2s; }
@@ -97,7 +97,7 @@
 
 /* Listón de marca: una cinta delgada con una línea roja paralela, como el trazo del logo */
 .ribbon-band { position: relative; z-index: 6; height: 46px; overflow: hidden; }
-.ribbon-band::before { content: ''; position: absolute; left: 0; right: 0; top: 43px; height: 3px; background: #ed1735; }
+.ribbon-band::before { content: ''; position: absolute; left: 0; right: 0; top: 43px; height: 3px; background: #D60517; }
 .editorial .ribbon-band .brand-ribbon {
   position: absolute;
   left: 0;
@@ -107,7 +107,7 @@
   margin: 0;
   padding: 0;
   border: 0;
-  background: linear-gradient(180deg, #16305c, #0f2447 45%, #0b1b37);
+  background: linear-gradient(180deg, #051C46, #051C46 45%, #051C46);
   color: #fff;
   font-size: 11px;
   font-weight: 500;
@@ -116,7 +116,7 @@
   mask-image: none;
 }
 .editorial .ribbon-band .ribbon-track > * { margin: 0 34px; }
-.editorial .ribbon-band .ribbon-track b { color: #ff6b80; font-size: 9px !important; font-weight: 400; opacity: 1; }
+.editorial .ribbon-band .ribbon-track b { color: #FF5A64; font-size: 9px !important; font-weight: 400; opacity: 1; }
 @media (max-width: 650px) {
   .ribbon-band { height: 36px; }
   .ribbon-band::before { top: 34px; height: 2px; }

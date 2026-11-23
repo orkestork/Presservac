@@ -1,0 +1,32 @@
+/* Franja promocional tipo e-commerce (datos reales: bolsa al vacío genérica en stock) */
+.promo { padding: 0 var(--gx, 48px) var(--sec-s, 48px); background: #F3F3F3; }
+.promo-bar { position: relative; display: grid; grid-template-columns: 1.3fr auto 1fr 1.1fr auto; align-items: center; gap: clamp(12px, 2vw, 32px);
+  min-height: 150px; padding: 14px clamp(20px, 3vw, 44px); overflow: hidden; border-radius: 22px; color: #fff; text-decoration: none;
+  background: linear-gradient(100deg, #B00413 0%, #D60517 35%, #F0283A 60%, #C2040F 100%); box-shadow: 0 24px 50px #D6051740; isolation: isolate; transition: transform .3s, box-shadow .3s; }
+.promo-bar:hover { transform: translateY(-3px); box-shadow: 0 30px 60px #D6051759; }
+.promo-bar::before { content: ''; position: absolute; z-index: -1; right: 22%; top: -40%; width: 46%; height: 180%; border-left: 3px solid #ffffff59; border-radius: 50%; }
+.promo-bar::after { content: ''; position: absolute; z-index: -1; inset: 0; background: radial-gradient(40% 120% at 45% 50%, #ffffff2e, transparent 70%); }
+.pm-a { display: grid; gap: 4px; justify-items: start; }
+.pm-title { font-size: clamp(20px, 1.8vw, 28px); font-weight: 800; line-height: 1.1; letter-spacing: -.02em; }
+.pm-sub { font-size: 14px; opacity: .92; }
+.pm-chip { margin-top: 4px; padding: 5px 12px; border-radius: 8px; background: #fff; color: #051C46; font-size: 13px; font-weight: 800; }
+.pm-badge { display: grid; place-items: center; padding: 12px 20px; border-radius: 16px; background: #0B0B0F; color: #fff; transform: rotate(-6deg); box-shadow: 0 12px 26px #0000004d; line-height: .95; text-align: center; }
+.pm-badge b:first-child { font-size: 16px; letter-spacing: .3em; }
+.pm-badge b:last-child { font-size: clamp(28px, 2.6vw, 40px); font-weight: 900; letter-spacing: -.02em; }
+.pm-img { position: relative; height: 150px; }
+.pm-img img { position: absolute; left: 50%; top: 50%; width: 170px; height: auto; translate: -50% -50%; rotate: -8deg; filter: drop-shadow(0 16px 18px #00000059); transition: rotate .4s, scale .4s; }
+.promo-bar:hover .pm-img img { rotate: 0deg; scale: 1.06; }
+.pm-c { display: grid; gap: 2px; justify-items: center; text-align: center; }
+.pm-label { font-size: 13px; font-weight: 600; opacity: .9; }
+.pm-big { padding: 4px 16px; border-radius: 12px; background: #051C46; font-size: clamp(24px, 2.2vw, 34px); font-weight: 900; letter-spacing: -.02em; }
+.pm-note { font-size: 12px; opacity: .85; }
+.pm-d { display: grid; gap: 10px; justify-items: center; }
+.pm-brand { font-size: clamp(18px, 1.6vw, 24px); font-weight: 900; font-style: italic; line-height: .95; text-align: center; letter-spacing: -.01em; text-shadow: 0 3px 0 #0000004d; }
+.pm-cta { padding: 9px 18px; border-radius: 999px; background: #0B0B0F; color: #fff; font-size: 14px; font-weight: 800; white-space: nowrap; transition: background-color .2s; }
+.promo-bar:hover .pm-cta { background: #051C46; }
+@media (max-width: 1100px) { .promo-bar { grid-template-columns: 1.3fr auto 1fr auto; } .pm-img { display: none; } }
+@media (max-width: 700px) {
+  .promo-bar { grid-template-columns: 1fr auto; grid-template-areas: "a b" "c d"; row-gap: 16px; min-height: 0; padding: 18px; }
+  .pm-a { grid-area: a; } .pm-badge { grid-area: b; } .pm-c { grid-area: c; justify-items: start; text-align: left; } .pm-d { grid-area: d; }
+  .pm-brand { display: none; }
+}

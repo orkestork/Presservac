@@ -1,0 +1,36 @@
+/* Ritmo vertical único para toda la página: mismos espacios entre secciones */
+:root { --sec: clamp(56px, 6vw, 88px); --sec-s: clamp(36px, 4vw, 56px); }
+.editorial .stories { padding: var(--sec) 0 var(--sec-s); }
+.editorial .d3-sticky { padding-top: var(--sec-s); }
+.editorial .discover.section { padding-top: var(--sec); padding-bottom: var(--sec-s); }
+.editorial .discover .image-note, .editorial .discover p:last-child { margin-bottom: 0; }
+.editorial .corporate-film { margin-top: 0; margin-bottom: 0; }
+.editorial .company.section { padding-top: var(--sec); padding-bottom: var(--sec-s); }
+.editorial .service-strip { padding-top: var(--sec-s); padding-bottom: var(--sec-s); }
+.editorial .contact-strip.flight-contact { margin-top: var(--sec-s); margin-bottom: var(--sec); }
+.editorial .seg-head, .editorial .discover .section-title { margin-bottom: clamp(20px, 2.4vw, 32px); }
+
+/* Margen lateral único: todo el contenido arranca y termina en la misma línea */
+:root { --gx: max(clamp(20px, 5vw, 80px), calc((100vw - 1480px) / 2)); }
+.editorial .header { padding-left: var(--gx); padding-right: var(--gx); }
+.editorial .st-row { max-width: none; padding-left: var(--gx); padding-right: var(--gx); }
+.editorial .stories .st-title, .editorial .stories .st-sub, .editorial .stories .st-kicker { padding-left: var(--gx); padding-right: var(--gx); }
+.editorial .discover.section { padding-left: var(--gx); padding-right: var(--gx); }
+.editorial .corporate-film { width: calc(100% - 2 * var(--gx)); max-width: none; margin-left: auto; margin-right: auto; }
+.editorial .corporate-film .cf-frame { width: 100%; max-width: none; margin: 0; }
+.editorial .company.section { padding-left: var(--gx); padding-right: var(--gx); }
+.editorial .service-strip { padding-left: var(--gx); padding-right: var(--gx); }
+.editorial .contact-strip.flight-contact { width: 100%; max-width: none; padding-left: var(--gx); padding-right: var(--gx); border-radius: 0; }
+.editorial footer { padding-left: var(--gx); padding-right: var(--gx); }
+.editorial .d3-sticky { padding-left: var(--gx); padding-right: var(--gx); }
+.hb { --hb-pad: var(--gx); }
+.editorial #vitrina { --vt-pad: var(--gx); }
+.editorial .st-row { scroll-padding-inline: var(--gx); }
+@media (max-width: 650px) { .editorial .flight-contact .flight-copy { padding: 0 0 24px; } .editorial .flight-contact .flight-visual { justify-content: center; } }
+@media (max-width: 650px) { .editorial .flight-contact .flight-copy { width: 100%; max-width: none; align-self: stretch; } }
+/* el subtítulo de tips no debe quedar comprimido por el margen lateral */
+.editorial .stories .st-sub { max-width: calc(56ch + 2 * var(--gx)); margin-left: auto; margin-right: auto; }
+/* margen lateral más pequeño: contenido más ancho */
+:root { --gx: max(clamp(16px, 3.5vw, 56px), calc((100vw - 1720px) / 2)); }
+/* sin manchas de color detrás de "Somos Presservac" */
+.editorial .company::before { display: none; }
