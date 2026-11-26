@@ -1,0 +1,3859 @@
+"use client";
+
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
+import Image from "next/image";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useProducts } from "../components/products-provider";
+import { categorias, MAX_EXTRA_IMAGES, type Categoria, type ProductoCatalogo } from "../data/catalog";
+import { MdAdd } from "react-icons/md";
+import type { ProductoEspecificacion, VariacionColor, VariacionPresentacion } from "../data/catalog";
+import type { InventoryMovementSummary } from "@/lib/products";
+import type { ShippingStatus } from "@/lib/orders";
+import { TIPO_VARIANTES } from "@/lib/volume-discounts";
+
+const disponibilidades: ProductoCatalogo["disponibilidad"][] = [
+  "Entrega inmediata",
+  "Disponible por pedido",
+  "Recoger en tienda",
+];
+
+type FormState = {
+  sku: string;
+  oemReferencia: string;
+  referenciasAlternas: string;
+  categoria: Categoria;
+  nombre: string;
+  marca: string;
+  precioValor: string;
+  precioAnteriorValor: string;
+  stock: string;
+  stockMinimo: string;
+  disponibilidad: ProductoCatalogo["disponibilidad"];
+  descripcion: string;
+  aplicacion: string;
+  compatibilidad: string;
+  garantia: string;
+  videoUrl: string;
+  isOutlet: boolean;
+};
+
+type TechnicalSpecFormItem = {
+  id: string;
+  etiqueta: string;
+  valor: string;
+};
+
+const initialState: FormState = {
+  sku: "",
+  oemReferencia: "",
+  referenciasAlternas: "",
+  categoria: categorias[0],
+  nombre: "",
+  marca: "Presservac",
+  precioValor: "",
+  precioAnteriorValor: "",
+  stock: "0",
+  stockMinimo: "0",
+  disponibilidad: "Entrega inmediata",
+  descripcion: "",
+  aplicacion: "",
+  compatibilidad: "",
+  garantia: "3 meses de garantía",
+  videoUrl: "",
+  isOutlet: false,
+};
+
+const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15 MB hard limit — se comprime antes de subir
+const RECOMMENDED_FILE_SIZE_KB = 500;
+
+// Redimensiona y convierte a WebP en el navegador antes de subir
+function compressImage(file: File, maxSizePx = 1200, quality = 0.82): Promise<File> {
+  return new Promise((resolve, reject) => {
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      reject(new Error("La imagen supera el límite de 15 MB."));
+      return;
+    }
+    const img = new window.Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const ratio = Math.min(1, maxSizePx / Math.max(img.width, img.height));
+      const w = Math.round(img.width * ratio);
+      const h = Math.round(img.height * ratio);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(file); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { resolve(file); return; }
+          const name = file.name.replace(/\.[^.]+$/, "") + ".webp";
+          resolve(new File([blob], name, { type: "image/webp" }));
+        },
+        "image/webp",
+        quality,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+const EXTRA_IMAGE_SLOTS = 3;
+const shippingStatuses: ShippingStatus[] = [
+  "PENDING",
+  "PREPARING",
+  "SHIPPED",
+  "DELIVERED",
+  "CANCELLED",
+];
+const paymentStatuses: Array<"PENDING" | "PAID" | "FAILED"> = [
+  "PENDING",
+  "PAID",
+  "FAILED",
+];
+
+function createTechnicalSpecItem(
+  spec?: Partial<ProductoEspecificacion>,
+): TechnicalSpecFormItem {
+  return {
+    id: crypto.randomUUID(),
+    etiqueta: spec?.etiqueta || "",
+    valor: spec?.valor || "",
+  };
+}
+
+/** Ficha mínima que necesita la IA (Sistema Maestro §10); las filas vacías no se guardan. */
+const FICHA_BASE = ["Material", "Capacidad", "Dimensiones", "Peso", "Observaciones"];
+
+function withFichaBase(items: ProductoEspecificacion[]): TechnicalSpecFormItem[] {
+  const present = new Set(items.map((item) => item.etiqueta.trim().toLowerCase()));
+  return [
+    ...items.map((item) => createTechnicalSpecItem(item)),
+    ...FICHA_BASE.filter((etiqueta) => !present.has(etiqueta.toLowerCase())).map((etiqueta) =>
+      createTechnicalSpecItem({ etiqueta }),
+    ),
+  ];
+}
+
+function normalizeTechnicalSpecFormItems(
+  items: TechnicalSpecFormItem[],
+): ProductoEspecificacion[] {
+  return items
+    .map((item) => ({
+      etiqueta: item.etiqueta.trim(),
+      valor: item.valor.trim(),
+    }))
+    .filter((item) => item.etiqueta && item.valor);
+}
+
+type ToastState = {
+  tone: "success" | "error";
+  message: string;
+} | null;
+
+type AdminOrder = {
+  id: string;
+  status: "PENDING" | "PAID" | "CANCELLED";
+  paymentStatus: "PENDING" | "PAID" | "FAILED";
+  shippingStatus: ShippingStatus;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  company: string | null;
+  department: string;
+  city: string;
+  addressLine1: string;
+  addressLine2: string | null;
+  carrier: string | null;
+  trackingNumber: string | null;
+  adminNotes: string | null;
+  shippedAt: string | Date | null;
+  deliveredAt: string | Date | null;
+  totalItems: number;
+  subtotal: number;
+  createdAt: string | Date;
+  user: {
+    id: string;
+    fullName: string;
+    email: string;
+  };
+  items: Array<{
+    id: string;
+    name: string;
+    productId?: string | null;
+    image?: string | null;
+    quantity: number;
+    unitPrice: number;
+    lineTotal: number;
+  }>;
+};
+
+type OrderEditState = {
+  shippingStatus: ShippingStatus;
+  paymentStatus: "PENDING" | "PAID" | "FAILED";
+  carrier: string;
+  trackingNumber: string;
+  adminNotes: string;
+};
+
+type ProductImageChoice = {
+  label: string;
+  image: string | null;
+};
+
+function getInventoryTone(
+  status?: ProductoCatalogo["estadoInventario"],
+) {
+  if (status === "out-of-stock") {
+    return {
+      label: "Agotado",
+      className: "bg-[#fff1f1] text-[#c53b3b]",
+    };
+  }
+
+  if (status === "low-stock") {
+    return {
+      label: "Stock bajo",
+      className: "bg-[#FDEEEF] text-[#051C46]",
+    };
+  }
+
+  return {
+    label: "En stock",
+    className: "bg-[#effaf2] text-[#1f6b39]",
+  };
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("es-CO", {
+    style: "currency",
+    currency: "COP",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function normalizeComparableText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function getShippingStatusLabel(status: ShippingStatus) {
+  if (status === "PREPARING") return "En preparación";
+  if (status === "SHIPPED") return "Enviado";
+  if (status === "DELIVERED") return "Entregado";
+  if (status === "CANCELLED") return "Cancelado";
+  return "Pendiente";
+}
+
+function getPaymentStatusLabel(status: "PENDING" | "PAID" | "FAILED") {
+  if (status === "PAID") return "Pago confirmado";
+  if (status === "FAILED") return "Pago fallido";
+  return "Pago pendiente";
+}
+
+function getOrderEditState(order: AdminOrder): OrderEditState {
+  return {
+    shippingStatus: order.shippingStatus,
+    paymentStatus: order.paymentStatus,
+    carrier: order.carrier || "",
+    trackingNumber: order.trackingNumber || "",
+    adminNotes: order.adminNotes || "",
+  };
+}
+
+function getDerivedOrderStatus(
+  shippingStatus: ShippingStatus,
+  paymentStatus: "PENDING" | "PAID" | "FAILED",
+): AdminOrder["status"] {
+  if (shippingStatus === "CANCELLED") return "CANCELLED";
+  if (paymentStatus === "PAID") return "PAID";
+  return "PENDING";
+}
+
+function getAdminOrderProgressStep(order: AdminOrder) {
+  if (order.shippingStatus === "DELIVERED") return 3;
+  if (order.shippingStatus === "SHIPPED") return 2;
+  if (order.shippingStatus === "PREPARING") return 1;
+  if (order.paymentStatus === "PAID" || order.status === "PAID") return 0;
+  return -1;
+}
+
+function AdminOrderProgress({ order }: { order: AdminOrder }) {
+  const activeStep = getAdminOrderProgressStep(order);
+  const steps = [
+    {
+      label: "Pedido confirmado",
+      icon: (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M6 3h9l3 3v15H6z" />
+          <path d="M15 3v3h3" />
+          <path d="M9 12h6" />
+          <path d="M9 16h4" />
+        </svg>
+      ),
+    },
+    {
+      label: "En preparación",
+      icon: (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M12 3 4 7l8 4 8-4-8-4Z" />
+          <path d="M4 7v10l8 4 8-4V7" />
+          <path d="M12 11v10" />
+        </svg>
+      ),
+    },
+    {
+      label: "Enviado",
+      icon: (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M3 7h11v8H3z" />
+          <path d="M14 10h3l4 3v2h-7z" />
+          <circle cx="7.5" cy="17.5" r="1.5" />
+          <circle cx="17.5" cy="17.5" r="1.5" />
+        </svg>
+      ),
+    },
+    {
+      label: "Recibido",
+      icon: (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m5 12 4 4L19 6" />
+        </svg>
+      ),
+    },
+  ];
+
+  return (
+    <div className="rounded-[1.4rem] border border-black/8 bg-[#fafaf9] px-5 py-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b8d91]">
+            Flujo del pedido
+          </p>
+          <p className="mt-2 text-sm leading-7 text-[#6e7379]">
+            Muestra el mismo progreso que verá el cliente en su cuenta.
+          </p>
+        </div>
+        <span className="rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#051C46] shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
+          {getShippingStatusLabel(order.shippingStatus)}
+        </span>
+      </div>
+
+      <div className="mt-5 overflow-x-auto">
+        <div className="relative min-w-[620px] px-1 py-2">
+          <div className="pointer-events-none absolute left-[12.5%] right-[12.5%] top-6 z-0">
+            <span className="block h-[6px] rounded-full bg-[#d9dde4] shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)]" />
+            <span
+              className="absolute left-0 top-0 h-[6px] rounded-full bg-gradient-to-r from-[#D60517] to-[#f4a261] shadow-[0_6px_16px_rgba(214,5,23,0.25)] transition-all duration-300"
+              style={{
+                width:
+                  activeStep < 0
+                    ? "0%"
+                    : `${(activeStep / (steps.length - 1)) * 100}%`,
+              }}
+            />
+          </div>
+
+          <div className="relative flex items-start justify-between gap-0">
+            {steps.map((step, index) => {
+              const isCompleted = activeStep >= 0 && index <= activeStep;
+              const isCurrent = index === activeStep;
+
+              return (
+                <div
+                  key={step.label}
+                  className="relative flex min-w-[136px] flex-1 flex-col items-center text-center"
+                >
+                  <span
+                    className={`relative z-10 flex h-12 w-12 shrink-0 items-center justify-center rounded-full border ${
+                      isCompleted
+                        ? "border-[#D60517] bg-[#D60517] text-white"
+                        : "border-black/10 bg-[#f8f8f7] text-[#8b8d91]"
+                    } ${isCurrent ? "shadow-[0_10px_24px_rgba(214,5,23,0.2)]" : ""}`}
+                  >
+                    {step.icon}
+                  </span>
+                  <div className="mt-3">
+                    <p
+                      className={`text-sm font-semibold ${
+                        isCompleted ? "text-[#051C46]" : "text-[#8b8d91]"
+                      }`}
+                    >
+                      {step.label}
+                    </p>
+                    {isCurrent && (
+                      <p className="mt-1 text-xs font-medium uppercase tracking-[0.14em] text-[#D60517]">
+                        Actual
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProductImageSelector({
+  choices,
+  primaryImageIndex,
+  onSelect,
+  description,
+}: {
+  choices: ProductImageChoice[];
+  primaryImageIndex: number;
+  onSelect: (index: number) => void;
+  description: string;
+}) {
+  return (
+    <div className="md:col-span-2 rounded-[1.5rem] border border-black/8 bg-[#fafaf9] p-4">
+      <p className="text-sm font-medium text-[#4f545a]">Elegir imagen principal</p>
+      <p className="mt-2 text-xs leading-6 text-[#6e7379]">{description}</p>
+      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+        {choices.map((item, index) => {
+          const hasImage = Boolean(item.image);
+
+          return (
+            <button
+              key={`choice-${item.label}-${index}`}
+              type="button"
+              onClick={() => hasImage && onSelect(index)}
+              disabled={!hasImage}
+              className={`group rounded-[1.15rem] border p-2.5 text-left transition-all duration-200 ${
+                primaryImageIndex === index && hasImage
+                  ? "border-[#051C46] bg-white shadow-[0_14px_28px_rgba(22,56,79,0.12)]"
+                  : "border-black/8 bg-white/96"
+              } ${hasImage ? "hover:-translate-y-0.5 hover:border-[#051C46]/30" : "cursor-not-allowed opacity-55"}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#9a9da2]">
+                    {item.label}
+                  </p>
+                  <p className="mt-1 text-xs text-[#5c6167]">
+                    {hasImage ? "Haz clic para usarla" : "Sin imagen"}
+                  </p>
+                </div>
+                <div
+                  className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                    primaryImageIndex === index && hasImage
+                      ? "bg-[#051C46] text-white"
+                      : "border border-black/8 text-[#8b8d91]"
+                  }`}
+                >
+                  {primaryImageIndex === index && hasImage ? "Principal" : "Vista"}
+                </div>
+              </div>
+              <div className="mt-3 overflow-hidden rounded-[0.95rem] border border-black/8 bg-[linear-gradient(180deg,#ffffff_0%,#f4f6f8_100%)]">
+                {item.image ? (
+                  <div className="relative p-2">
+                    {primaryImageIndex === index && hasImage && (
+                      <div className="absolute right-4 top-4 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-[#D60517] text-white shadow-[0_10px_20px_rgba(214,5,23,0.28)]">
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 20 20"
+                          className="h-3.5 w-3.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M4.5 10.5 8 14l7.5-8" />
+                        </svg>
+                      </div>
+                    )}
+                    <div className="overflow-hidden rounded-[0.8rem] bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]">
+                      <Image
+                        src={item.image}
+                        alt={`Opción ${item.label}`}
+                        width={320}
+                        height={240}
+                        className="h-20 w-full object-cover md:h-24"
+                        unoptimized={item.image.startsWith("blob:")}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex h-24 items-center justify-center text-xs font-medium text-[#a2a5aa] md:h-28">
+                    Sin imagen
+                  </div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function getYouTubeId(url: string): string | null {
+  const m = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/);
+  return m ? m[1] : null;
+}
+
+function ProductVideoInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (url: string) => void;
+}) {
+  const videoId = getYouTubeId(value);
+  return (
+    <div className="md:col-span-2 rounded-[1.5rem] border border-black/8 bg-[#fafaf9] p-4">
+      <p className="text-sm font-medium text-[#4f545a]">Video del producto</p>
+      <p className="mt-2 text-xs leading-6 text-[#6e7379]">
+        Pega el enlace de YouTube. Se mostrará de último en la galería del producto.
+      </p>
+      <input
+        type="url"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="https://www.youtube.com/watch?v=..."
+        className="mt-4 w-full rounded-xl border border-black/10 bg-white px-4 py-2.5 text-sm text-[#2c3036] outline-none focus:border-[#051C46]"
+      />
+      {value && !videoId && (
+        <p className="mt-2 text-xs text-red-500">Enlace de YouTube no válido.</p>
+      )}
+      {videoId && (
+        <div className="mt-4 aspect-video w-full max-w-md overflow-hidden rounded-xl border border-black/8">
+          <iframe
+            src={`https://www.youtube.com/embed/${videoId}`}
+            title="Vista previa del video"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            allowFullScreen
+            className="h-full w-full"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const MAX_VARIANT_IMAGES = 4;
+
+function ColorVariantImageUpload({
+  value,
+  onChange,
+  galleryImages,
+  label = "Fotos del color",
+}: {
+  value: string[];
+  onChange: (urls: string[]) => void;
+  galleryImages: string[];
+  label?: string;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const images = value.filter(Boolean).slice(0, MAX_VARIANT_IMAGES);
+  const slotsLeft = MAX_VARIANT_IMAGES - images.length;
+
+  const handleFiles = async (files: FileList) => {
+    const toUpload = Array.from(files).slice(0, slotsLeft);
+    if (toUpload.length === 0) return;
+    setUploading(true);
+    const uploaded: string[] = [];
+    try {
+      for (const file of toUpload) {
+        let toSend: File = file;
+        try {
+          toSend = await compressImage(file);
+        } catch (err) {
+          console.error(err);
+        }
+        const fd = new FormData();
+        fd.append("file", toSend);
+        fd.append("productName", "color-variant");
+        const res = await fetch("/api/uploads", { method: "POST", body: fd });
+        const payload = await res.json() as { publicUrl?: string; error?: string };
+        if (payload.publicUrl) {
+          uploaded.push(payload.publicUrl);
+        } else if (payload.error) {
+          console.error(payload.error);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      if (uploaded.length > 0) onChange([...images, ...uploaded]);
+      setUploading(false);
+    }
+  };
+
+  const removeImage = (img: string) => onChange(images.filter((i) => i !== img));
+
+  const allImages = galleryImages.filter(Boolean);
+
+  return (
+    <div className="space-y-2">
+      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">
+        {label} ({images.length}/{MAX_VARIANT_IMAGES})
+      </span>
+
+      {/* Preview grid */}
+      <div className="flex flex-wrap items-center gap-3">
+        {images.map((img) => (
+          <div key={img} className="group relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-black/10 bg-[#f5f5f5]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={img} alt="" className="h-full w-full object-cover" />
+            <button
+              type="button"
+              onClick={() => removeImage(img)}
+              className="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
+              aria-label="Quitar imagen"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+        ))}
+        {slotsLeft > 0 && (
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              disabled={uploading}
+              className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-xs font-semibold text-[#051C46] transition-colors hover:bg-[#051C46] hover:text-white disabled:opacity-60"
+            >
+              {uploading ? (
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              ) : (
+                <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              )}
+              {uploading ? "Subiendo..." : "Cargar imagen"}
+            </button>
+            <p className="text-[10px] text-[#9a9da2]">JPG, PNG, WebP · máx. {slotsLeft} más</p>
+          </div>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => { const f = e.target.files; if (f && f.length) handleFiles(f); e.target.value = ""; }}
+        />
+      </div>
+
+      {/* Gallery quick-pick if available */}
+      {allImages.length > 0 && slotsLeft > 0 && (
+        <div>
+          <p className="mb-1.5 text-[10px] text-[#9a9da2]">O elige de las imágenes del producto:</p>
+          <div className="flex flex-wrap gap-2">
+            {allImages.map((img) => (
+              <button
+                key={img}
+                type="button"
+                onClick={() => { if (!images.includes(img)) onChange([...images, img]); }}
+                className={`h-12 w-12 overflow-hidden rounded-xl border-2 transition-all ${images.includes(img) ? "border-[#D60517]" : "border-black/10 hover:border-[#D60517]/50"}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={img} alt="" className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColorVariantsEditor({
+  variants,
+  onChange,
+  galleryImages,
+}: {
+  variants: VariacionColor[];
+  onChange: (v: VariacionColor[]) => void;
+  galleryImages: string[];
+}) {
+  const addVariant = () => {
+    const initialImage = galleryImages[0] ?? "";
+    const nueva = { color: "#ffffff", label: "", image: initialImage, images: initialImage ? [initialImage] : [] };
+    const hasBlanco = variants.some((v) => v.label.trim().toLowerCase() === "blanco");
+    if (variants.length === 0 && !hasBlanco) {
+      const blanco = { color: "#ffffff", label: "Blanco", image: initialImage, images: initialImage ? [initialImage] : [] };
+      onChange([blanco, nueva]);
+    } else {
+      onChange([...variants, nueva]);
+    }
+  };
+  const removeVariant = (i: number) => onChange(variants.filter((_, idx) => idx !== i));
+  const updateVariant = (i: number, field: "color" | "label", value: string) =>
+    onChange(variants.map((v, idx) => (idx === i ? { ...v, [field]: value } : v)));
+  const updateVariantPrice = (i: number, value: string) => {
+    const parsed = value.trim() === "" ? undefined : Math.max(0, Math.round(Number(value)));
+    onChange(variants.map((v, idx) => (idx === i ? { ...v, precioValor: Number.isFinite(parsed) ? parsed : undefined } : v)));
+  };
+  const updateVariantImages = (i: number, images: string[]) =>
+    onChange(variants.map((v, idx) => (idx === i ? { ...v, images, image: images[0] ?? "" } : v)));
+  const updateVariantCode = (i: number, field: "sku" | "skuSello", value: string) =>
+    onChange(
+      variants.map((v, idx) =>
+        idx === i ? { ...v, [field]: value.trim() === "" ? undefined : value } : v,
+      ),
+    );
+  const addColorPresentacion = (i: number) => {
+    const initialImage = galleryImages[0] ?? "";
+    onChange(
+      variants.map((v, idx) =>
+        idx === i
+          ? {
+              ...v,
+              variacionesPresentacion: [
+                ...(v.variacionesPresentacion ?? []),
+                { label: "", image: initialImage, images: initialImage ? [initialImage] : [] },
+              ],
+            }
+          : v,
+      ),
+    );
+  };
+  const removeColorPresentacion = (i: number, pi: number) =>
+    onChange(
+      variants.map((v, idx) =>
+        idx === i
+          ? { ...v, variacionesPresentacion: (v.variacionesPresentacion ?? []).filter((_, j) => j !== pi) }
+          : v,
+      ),
+    );
+  const updateColorPresentacion = (
+    i: number,
+    pi: number,
+    patch: Partial<VariacionPresentacion>,
+  ) =>
+    onChange(
+      variants.map((v, idx) =>
+        idx === i
+          ? {
+              ...v,
+              variacionesPresentacion: (v.variacionesPresentacion ?? []).map((p, j) =>
+                j === pi ? { ...p, ...patch } : p,
+              ),
+            }
+          : v,
+      ),
+    );
+
+  return (
+    <div className="md:col-span-2 rounded-[1.5rem] border border-black/8 bg-[#fafaf9] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-[#4f545a]">Variaciones de color</p>
+          <p className="mt-2 text-xs leading-6 text-[#6e7379]">
+            Define los colores disponibles del producto. Al pasar el cursor en la tarjeta se mostrará la imagen del color.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={addVariant}
+          className="inline-flex rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+        >
+          Agregar color
+        </button>
+      </div>
+
+      <div className="mt-5 space-y-3">
+        {variants.length === 0 && (
+          <div className="rounded-[1.2rem] border border-dashed border-black/12 bg-white px-4 py-5 text-sm text-[#6e7379]">
+            Sin variaciones de color. Agrega los colores disponibles del producto.
+          </div>
+        )}
+        {variants.map((v, i) => (
+          <div key={i} className="space-y-3 rounded-[1.2rem] border border-black/8 bg-white p-4">
+            <div className="grid gap-3 md:grid-cols-[56px_1fr_140px_minmax(0,2fr)_auto]">
+              {/* Color picker */}
+              <div className="flex flex-col items-center gap-2">
+                <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Color</label>
+                <div className="relative">
+                  <input
+                    type="color"
+                    value={v.color}
+                    onChange={(e) => updateVariant(i, "color", e.target.value)}
+                    className="h-10 w-10 cursor-pointer rounded-full border border-black/10 p-0.5"
+                  />
+                </div>
+              </div>
+              {/* Label */}
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Nombre</span>
+                <input
+                  value={v.label}
+                  onChange={(e) => updateVariant(i, "label", e.target.value)}
+                  placeholder="Ej. Blanco, Negro..."
+                  className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-3 py-2.5 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                />
+              </label>
+              {/* Precio por color (opcional) */}
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Precio (opcional)</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={v.precioValor ?? ""}
+                  onChange={(e) => updateVariantPrice(i, e.target.value)}
+                  placeholder="Precio del producto"
+                  className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-3 py-2.5 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                />
+              </label>
+              {/* Image upload */}
+              <ColorVariantImageUpload
+                value={v.images?.length ? v.images : v.image ? [v.image] : []}
+                onChange={(urls) => updateVariantImages(i, urls)}
+                galleryImages={galleryImages}
+              />
+              {/* Remove */}
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  onClick={() => removeVariant(i)}
+                  className="inline-flex rounded-full border border-black/10 px-4 py-2.5 text-sm font-semibold text-[#051C46] transition-colors hover:bg-[#051C46] hover:text-white"
+                >
+                  Quitar
+                </button>
+              </div>
+            </div>
+
+            {/* Código por color */}
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Código (sin sello)</span>
+                <input
+                  value={v.sku ?? ""}
+                  onChange={(e) => updateVariantCode(i, "sku", e.target.value)}
+                  placeholder="Ej. SVNK.G.TK - 247"
+                  className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-3 py-2.5 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                />
+              </label>
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Código con sello</span>
+                <input
+                  value={v.skuSello ?? ""}
+                  onChange={(e) => updateVariantCode(i, "skuSello", e.target.value)}
+                  placeholder="Ej. SVNK.G.TK - 247"
+                  className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-3 py-2.5 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                />
+              </label>
+            </div>
+
+            {/* Presentaciones propias de este color */}
+            <div className="rounded-xl border border-dashed border-black/12 bg-[#fafaf9] p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">
+                  Presentaciones de {v.label.trim() || "este color"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => addColorPresentacion(i)}
+                  className="inline-flex rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#051C46] transition-colors hover:bg-[#051C46] hover:text-white"
+                >
+                  Agregar presentación
+                </button>
+              </div>
+              {(v.variacionesPresentacion ?? []).length === 0 ? (
+                <p className="mt-2 text-[11px] text-[#9a9da2]">
+                  Sin presentaciones propias. Se usarán las presentaciones generales del producto.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {(v.variacionesPresentacion ?? []).map((p, pi) => (
+                    <div
+                      key={pi}
+                      className="grid gap-3 rounded-xl border border-black/8 bg-white p-3 md:grid-cols-[minmax(0,200px)_minmax(0,2fr)_auto]"
+                    >
+                      <label className="space-y-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Nombre</span>
+                        <input
+                          value={p.label}
+                          onChange={(e) => updateColorPresentacion(i, pi, { label: e.target.value })}
+                          placeholder="Ej. Cierre Plástico..."
+                          className="w-full rounded-lg border border-black/10 bg-[#fafaf9] px-3 py-2 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                        />
+                      </label>
+                      <ColorVariantImageUpload
+                        label="Fotos"
+                        value={p.images?.length ? p.images : p.image ? [p.image] : []}
+                        onChange={(urls) =>
+                          updateColorPresentacion(i, pi, { images: urls, image: urls[0] ?? "" })
+                        }
+                        galleryImages={galleryImages}
+                      />
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          onClick={() => removeColorPresentacion(i, pi)}
+                          className="inline-flex rounded-full border border-black/10 px-3 py-2 text-sm font-semibold text-[#051C46] transition-colors hover:bg-[#051C46] hover:text-white"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                      <div className="grid gap-3 md:col-span-3 md:grid-cols-2">
+                        <label className="space-y-2">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Código (sin sello)</span>
+                          <input
+                            value={p.sku ?? ""}
+                            onChange={(e) => updateColorPresentacion(i, pi, { sku: e.target.value })}
+                            placeholder="Ej. SVNK.G.TK - 247"
+                            className="w-full rounded-lg border border-black/10 bg-[#fafaf9] px-3 py-2 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                          />
+                        </label>
+                        <label className="space-y-2">
+                          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Código con sello</span>
+                          <input
+                            value={p.skuSello ?? ""}
+                            onChange={(e) => updateColorPresentacion(i, pi, { skuSello: e.target.value })}
+                            placeholder="Ej. SVNK.G.TK - 247"
+                            className="w-full rounded-lg border border-black/10 bg-[#fafaf9] px-3 py-2 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PresentationVariantsEditor({
+  variants,
+  onChange,
+  galleryImages,
+}: {
+  variants: VariacionPresentacion[];
+  onChange: (v: VariacionPresentacion[]) => void;
+  galleryImages: string[];
+}) {
+  const addVariant = () => {
+    const initialImage = galleryImages[0] ?? "";
+    onChange([
+      ...variants,
+      { label: "", image: initialImage, images: initialImage ? [initialImage] : [] },
+    ]);
+  };
+  const removeVariant = (i: number) => onChange(variants.filter((_, idx) => idx !== i));
+  const updateLabel = (i: number, value: string) =>
+    onChange(variants.map((v, idx) => (idx === i ? { ...v, label: value } : v)));
+  const updateImages = (i: number, images: string[]) =>
+    onChange(variants.map((v, idx) => (idx === i ? { ...v, images, image: images[0] ?? "" } : v)));
+  const updateCode = (i: number, field: "sku" | "skuSello", value: string) =>
+    onChange(
+      variants.map((v, idx) =>
+        idx === i ? { ...v, [field]: value.trim() === "" ? undefined : value } : v,
+      ),
+    );
+
+  return (
+    <div className="md:col-span-2 rounded-[1.5rem] border border-black/8 bg-[#fafaf9] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-[#4f545a]">Variaciones de presentación</p>
+          <p className="mt-2 text-xs leading-6 text-[#6e7379]">
+            Define las presentaciones del producto (ej. Cierre Plástico, Cierre Metálico). Al elegir una
+            presentación en la ficha se mostrará su imagen.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={addVariant}
+          className="inline-flex rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+        >
+          Agregar presentación
+        </button>
+      </div>
+
+      <div className="mt-5 space-y-3">
+        {variants.length === 0 && (
+          <div className="rounded-[1.2rem] border border-dashed border-black/12 bg-white px-4 py-5 text-sm text-[#6e7379]">
+            Sin variaciones de presentación. Agrega las presentaciones disponibles del producto.
+          </div>
+        )}
+        {variants.map((v, i) => (
+          <div
+            key={i}
+            className="grid gap-3 rounded-[1.2rem] border border-black/8 bg-white p-4 md:grid-cols-[minmax(0,220px)_minmax(0,2fr)_auto]"
+          >
+            <label className="space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Nombre</span>
+              <input
+                value={v.label}
+                onChange={(e) => updateLabel(i, e.target.value)}
+                placeholder="Ej. Cierre Plástico, Cierre Metálico..."
+                className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-3 py-2.5 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+              />
+            </label>
+            <ColorVariantImageUpload
+              label="Fotos de la presentación"
+              value={v.images?.length ? v.images : v.image ? [v.image] : []}
+              onChange={(urls) => updateImages(i, urls)}
+              galleryImages={galleryImages}
+            />
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => removeVariant(i)}
+                className="inline-flex rounded-full border border-black/10 px-4 py-2.5 text-sm font-semibold text-[#051C46] transition-colors hover:bg-[#051C46] hover:text-white"
+              >
+                Quitar
+              </button>
+            </div>
+            <div className="grid gap-3 md:col-span-3 md:grid-cols-2">
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Código (sin sello)</span>
+                <input
+                  value={v.sku ?? ""}
+                  onChange={(e) => updateCode(i, "sku", e.target.value)}
+                  placeholder="Ej. SVNK.G.TK - 247"
+                  className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-3 py-2.5 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                />
+              </label>
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">Código con sello</span>
+                <input
+                  value={v.skuSello ?? ""}
+                  onChange={(e) => updateCode(i, "skuSello", e.target.value)}
+                  placeholder="Ej. SVNK.G.TK - 247"
+                  className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-3 py-2.5 text-sm text-[#1f2328] outline-none focus:border-[#D60517]"
+                />
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TechnicalSpecsEditor({
+  items,
+  onChange,
+}: {
+  items: TechnicalSpecFormItem[];
+  onChange: (items: TechnicalSpecFormItem[]) => void;
+}) {
+  const updateItem = (
+    id: string,
+    field: "etiqueta" | "valor",
+    value: string,
+  ) => {
+    onChange(
+      items.map((item) => (item.id === id ? { ...item, [field]: value } : item)),
+    );
+  };
+
+  const removeItem = (id: string) => {
+    onChange(items.filter((item) => item.id !== id));
+  };
+
+  const addItem = () => {
+    onChange([...items, createTechnicalSpecItem()]);
+  };
+
+  return (
+    <div className="md:col-span-2 rounded-[1.5rem] border border-black/8 bg-[#fafaf9] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-[#4f545a]">
+            Ficha técnica del producto
+          </p>
+          <p className="mt-2 text-xs leading-6 text-[#6e7379]">
+            Agrega solo las especificaciones que apliquen para este producto. Puedes dejar pocas o muchas.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={addItem}
+          className="inline-flex rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+        >
+          Agregar especificación
+        </button>
+      </div>
+
+      <div className="mt-5 space-y-3">
+        {items.length === 0 && (
+          <div className="rounded-[1.2rem] border border-dashed border-black/12 bg-white px-4 py-5 text-sm text-[#6e7379]">
+            Aún no hay especificaciones. Agrega las filas que necesites para esta categoría.
+          </div>
+        )}
+
+        {items.map((item, index) => (
+          <div
+            key={item.id}
+            className="grid gap-3 rounded-[1.2rem] border border-black/8 bg-white p-4 md:grid-cols-[220px_minmax(0,1fr)_auto]"
+          >
+            <label className="space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">
+                Etiqueta
+              </span>
+              <input
+                value={item.etiqueta}
+                onChange={(event) => updateItem(item.id, "etiqueta", event.target.value)}
+                placeholder={index === 0 ? "Ej. Material" : "Nombre del dato"}
+                className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+              />
+            </label>
+
+            <label className="space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#8b8d91]">
+                Valor
+              </span>
+              <input
+                value={item.valor}
+                onChange={(event) => updateItem(item.id, "valor", event.target.value)}
+                placeholder="Escribe la especificación"
+                className="w-full rounded-xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+              />
+            </label>
+
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => removeItem(item.id)}
+                className="inline-flex rounded-full border border-black/10 px-4 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+              >
+                Quitar
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function splitCommaSeparatedValues(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export default function AdminPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const isEmbed = searchParams.get("embed") === "1";
+  const {
+    adminProducts,
+    createProduct,
+    updateProduct,
+    removeProduct,
+    adjustInventory,
+  } = useProducts();
+  const [activeTab, setActiveTab] = useState<
+    "create" | "edit" | "inventory" | "orders" | null
+  >(null);
+  const [editSearch, setEditSearch] = useState("");
+  const [editCategoryFilter, setEditCategoryFilter] = useState<"Todas" | Categoria>("Todas");
+  const [inventoryStatusFilter, setInventoryStatusFilter] = useState<
+    "all" | "low-stock" | "out-of-stock"
+  >("all");
+  const [orderSearch, setOrderSearch] = useState("");
+  const [orderShippingFilter, setOrderShippingFilter] = useState<
+    "all" | ShippingStatus
+  >("all");
+  const [form, setForm] = useState<FormState>(initialState);
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [technicalSpecs, setTechnicalSpecs] = useState<TechnicalSpecFormItem[]>(() => withFichaBase([]));
+  const [colorVariants, setColorVariants] = useState<VariacionColor[]>([]);
+  const [presentationVariants, setPresentationVariants] = useState<VariacionPresentacion[]>([]);
+  const [selectedExtraImages, setSelectedExtraImages] = useState<Array<File | null>>(
+    () => Array.from({ length: EXTRA_IMAGE_SLOTS }, () => null),
+  );
+  // Casillas de imagen extra visibles; arranca en 3 y el usuario puede agregar más.
+  const [extraSlots, setExtraSlots] = useState(EXTRA_IMAGE_SLOTS);
+  const addExtraSlot = () => {
+    setExtraSlots((current) => Math.min(current + 1, MAX_EXTRA_IMAGES));
+    setSelectedExtraImages((current) => [...current, null]);
+  };
+  const [primaryImageIndex, setPrimaryImageIndex] = useState(0);
+  const [fileInputKey, setFileInputKey] = useState(0);
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [requestError, setRequestError] = useState("");
+  const [toast, setToast] = useState<ToastState>(null);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminName, setAdminName] = useState("");
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [inventoryAdjustments, setInventoryAdjustments] = useState<Record<string, string>>({});
+  const [inventoryMovements, setInventoryMovements] = useState<InventoryMovementSummary[]>([]);
+  const [isLoadingInventory, setIsLoadingInventory] = useState(false);
+  const [orders, setOrders] = useState<AdminOrder[]>([]);
+  const [isLoadingOrders, setIsLoadingOrders] = useState(false);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ slug: string; nombre: string } | null>(null);
+  const [orderForm, setOrderForm] = useState<OrderEditState>({
+    shippingStatus: "PENDING",
+    paymentStatus: "PENDING",
+    carrier: "",
+    trackingNumber: "",
+    adminNotes: "",
+  });
+  const [isSavingOrder, setIsSavingOrder] = useState(false);
+  const editFormRef = useRef<HTMLFormElement | null>(null);
+  const editingProduct =
+    adminProducts.find((product) => product.slug === editingSlug) ?? null;
+  const [packs, setPacks] = useState<{ label: string; qty: number; totalPrice: number }[]>([]);
+  const [packProductId, setPackProductId] = useState<string | null>(null);
+  const [packsSaving, setPacksSaving] = useState(false);
+  const [packsMsg, setPacksMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+  useEffect(() => {
+    setPacksMsg(null);
+    if (!editingSlug) { setPacks([]); setPackProductId(null); return; }
+    fetch("/api/panel/products")
+      .then((r) => r.json())
+      .then((list: { id: string; slug: string; packPrices: { label: string; qty: number; totalPrice: number }[] }[]) => {
+        const match = list.find((p) => p.slug === editingSlug);
+        setPackProductId(match?.id ?? null);
+        setPacks(match?.packPrices ?? []);
+      });
+  }, [editingSlug]);
+  const addPack = () => setPacks((prev) => [...prev, { label: "", qty: 12, totalPrice: 0 }]);
+  const removePack = (i: number) => setPacks((prev) => prev.filter((_, idx) => idx !== i));
+  const updatePack = (i: number, field: "label" | "qty" | "totalPrice", value: string) => {
+    setPacks((prev) => prev.map((p, idx) => {
+      if (idx !== i) return p;
+      if (field === "label") return { ...p, label: value };
+      return { ...p, [field]: parseInt(value.replace(/\D/g, ""), 10) || 0 };
+    }));
+  };
+  const savePacks = async () => {
+    if (!packProductId) return;
+    const invalid = packs.find((p) => !p.label.trim() || p.qty <= 0 || p.totalPrice <= 0);
+    if (invalid) { setPacksMsg({ type: "err", text: "Completa etiqueta, cantidad y precio en cada presentación" }); return; }
+    setPacksSaving(true);
+    const r = await fetch("/api/panel/products", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId: packProductId, packPrices: packs }),
+    });
+    setPacksSaving(false);
+    setPacksMsg(r.ok ? { type: "ok", text: "Presentaciones guardadas" } : { type: "err", text: "No se pudo guardar" });
+  };
+  const previewImageUrl = useMemo(() => {
+    if (selectedImage) {
+      return URL.createObjectURL(selectedImage);
+    }
+
+    return editingProduct?.imagen ?? null;
+  }, [editingProduct?.imagen, selectedImage]);
+  const previewExtraImageUrls = useMemo(
+    () =>
+      Array.from({ length: extraSlots }, (_, index) => {
+        const file = selectedExtraImages[index];
+
+        if (file) {
+          return URL.createObjectURL(file);
+        }
+
+        return editingProduct?.imagenesExtra?.[index] ?? null;
+      }),
+    [editingProduct?.imagenesExtra, extraSlots, selectedExtraImages],
+  );
+  const productImageChoices = useMemo(
+    () => [
+      {
+        label: "Principal",
+        image: previewImageUrl,
+      },
+      ...previewExtraImageUrls.map((image, index) => ({
+        label: `Extra ${index + 1}`,
+        image,
+      })),
+    ],
+    [previewExtraImageUrls, previewImageUrl],
+  );
+  const selectedOrder =
+    orders.find((order) => order.id === selectedOrderId) ?? null;
+  const selectedOrderPreview = useMemo(() => {
+    if (!selectedOrder) return null;
+
+    return {
+      ...selectedOrder,
+      status: getDerivedOrderStatus(
+        orderForm.shippingStatus,
+        orderForm.paymentStatus,
+      ),
+      shippingStatus: orderForm.shippingStatus,
+      paymentStatus: orderForm.paymentStatus,
+      carrier: orderForm.carrier.trim() || null,
+      trackingNumber: orderForm.trackingNumber.trim() || null,
+      adminNotes: orderForm.adminNotes.trim() || null,
+    };
+  }, [orderForm, selectedOrder]);
+  const filteredProducts = useMemo(() => {
+    const search = editSearch.trim().toLowerCase();
+
+    return adminProducts.filter((product) => {
+      const matchesCategory =
+        editCategoryFilter === "Todas" || product.categoria === editCategoryFilter;
+      const matchesSearch =
+        search.length === 0 ||
+        product.nombre.toLowerCase().includes(search) ||
+        product.marca.toLowerCase().includes(search) ||
+        (product.sku || "").toLowerCase().includes(search);
+      const matchesInventory =
+        inventoryStatusFilter === "all" ||
+        product.estadoInventario === inventoryStatusFilter;
+
+      return matchesCategory && matchesSearch && matchesInventory;
+    });
+  }, [adminProducts, editCategoryFilter, editSearch, inventoryStatusFilter]);
+  const filteredOrders = useMemo(() => {
+    const search = orderSearch.trim().toLowerCase();
+
+    return orders.filter((order) => {
+      const matchesFilter =
+        orderShippingFilter === "all" || order.shippingStatus === orderShippingFilter;
+      const matchesSearch =
+        search.length === 0 ||
+        order.id.toLowerCase().includes(search) ||
+        order.customerName.toLowerCase().includes(search) ||
+        order.customerEmail.toLowerCase().includes(search) ||
+        order.city.toLowerCase().includes(search) ||
+        (order.trackingNumber || "").toLowerCase().includes(search);
+
+      return matchesFilter && matchesSearch;
+    });
+  }, [orderSearch, orderShippingFilter, orders]);
+
+  const productCountLabel = `${adminProducts.length} producto${adminProducts.length === 1 ? "" : "s"} en catálogo`;
+  const isOutletForm = form.isOutlet;
+
+  useEffect(() => {
+    if (previewImageUrl?.startsWith("blob:")) {
+      return () => {
+        URL.revokeObjectURL(previewImageUrl);
+      };
+    }
+  }, [previewImageUrl]);
+
+  useEffect(() => {
+    return () => {
+      previewExtraImageUrls.forEach((image) => {
+        if (image?.startsWith("blob:")) {
+          URL.revokeObjectURL(image);
+        }
+      });
+    };
+  }, [previewExtraImageUrls]);
+
+  useEffect(() => {
+    if (!toast) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setToast(null);
+    }, 2800);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [toast]);
+
+  useEffect(() => {
+    void (async () => {
+      const response = await fetch("/api/account");
+
+      if (!response.ok) {
+        setIsAuthenticated(false);
+        setAdminName("");
+        setIsCheckingSession(false);
+        return;
+      }
+
+      const payload = (await response.json()) as {
+        user?: { fullName: string; role: "CUSTOMER" | "ADMIN" | "SELLER" | "SUPERADMIN" };
+      };
+
+      if (
+        payload.user?.role === "ADMIN" ||
+        payload.user?.role === "SELLER" ||
+        payload.user?.role === "SUPERADMIN"
+      ) {
+        setIsAuthenticated(true);
+        setAdminName(payload.user.fullName);
+      } else {
+        setIsAuthenticated(false);
+        setAdminName("");
+      }
+
+      setIsCheckingSession(false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "edit" && editingSlug && editFormRef.current) {
+      editFormRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [activeTab, editingSlug]);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "create") openCreateView();
+    else if (tab === "edit") openEditView();
+    else if (tab === "inventory") openInventoryView();
+    else if (tab === "orders") openOrdersView();
+    else if (tab === "outlet") openCreateOutletView();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const embedSlug = searchParams.get("slug");
+
+  useEffect(() => {
+    if (embedSlug && adminProducts.some((p) => p.slug === embedSlug) && editingSlug !== embedSlug) {
+      handleEditProduct(embedSlug);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedSlug, adminProducts]);
+
+  useEffect(() => {
+    if (!isCheckingSession && !isAuthenticated) {
+      router.replace("/login?next=/admin");
+    }
+  }, [isAuthenticated, isCheckingSession, router]);
+
+  const handleAdminLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setIsAuthenticated(false);
+      setAdminName("");
+      window.location.replace("/login");
+    }
+  };
+
+  const handleChange = (
+    event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>,
+  ) => {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+  };
+
+  const handleImageChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    if (!file) return;
+
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setRequestError("La imagen supera el límite de 15 MB.");
+      setSelectedImage(null);
+      setFileInputKey((current) => current + 1);
+      return;
+    }
+
+    setRequestError("");
+    try {
+      const compressed = await compressImage(file);
+      setSelectedImage(compressed);
+    } catch {
+      setSelectedImage(file);
+    }
+  };
+
+  const handleExtraImageChange =
+    (index: number) => async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0] ?? null;
+      if (!file) return;
+
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        setRequestError("Una de las imágenes extra supera el límite de 15 MB.");
+        setSelectedExtraImages((current) =>
+          current.map((item, itemIndex) => (itemIndex === index ? null : item)),
+        );
+        setFileInputKey((current) => current + 1);
+        return;
+      }
+
+      setRequestError("");
+      try {
+        const compressed = await compressImage(file);
+        setSelectedExtraImages((current) =>
+          current.map((item, itemIndex) => (itemIndex === index ? compressed : item)),
+        );
+      } catch {
+        setSelectedExtraImages((current) =>
+          current.map((item, itemIndex) => (itemIndex === index ? file : item)),
+        );
+      }
+    };
+
+  const uploadProductImage = async (file: File, productName: string) => {
+    const uploadData = new FormData();
+    uploadData.append("file", file);
+    uploadData.append("productName", productName);
+
+    const uploadResponse = await fetch("/api/uploads", {
+      method: "POST",
+      body: uploadData,
+    });
+
+    const uploadPayload = (await uploadResponse.json()) as {
+      error?: string;
+      publicUrl?: string;
+    };
+
+    if (!uploadResponse.ok || !uploadPayload.publicUrl) {
+      throw new Error(
+        uploadPayload.error || "No fue posible subir la imagen a Supabase Storage.",
+      );
+    }
+
+    return uploadPayload.publicUrl;
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsSavingProduct(true);
+    setRequestError("");
+    setToast(null);
+    const isEditing = Boolean(editingSlug);
+
+    if (!editingSlug && !selectedImage) {
+      setIsSavingProduct(false);
+      setRequestError("Selecciona una imagen para el producto.");
+      setToast({
+        tone: "error",
+        message: "Selecciona una imagen antes de guardar el producto.",
+      });
+      return;
+    }
+
+    let imageUrl =
+      adminProducts.find((product) => product.slug === editingSlug)?.imagen ||
+      "/product-placeholder.png";
+
+    try {
+      if (selectedImage) {
+        imageUrl = await uploadProductImage(selectedImage, form.nombre);
+      }
+
+      const currentExtraImages =
+        adminProducts.find((product) => product.slug === editingSlug)?.imagenesExtra || [];
+      const extraImageUrls = await Promise.all(
+        Array.from({ length: extraSlots }, async (_, index) => {
+          const selectedFile = selectedExtraImages[index];
+
+          if (selectedFile) {
+            return await uploadProductImage(
+              selectedFile,
+              `${form.nombre}-extra-${index + 1}`,
+            );
+          }
+
+          return currentExtraImages[index] || null;
+        }),
+      );
+
+      const orderedImages = [imageUrl, ...extraImageUrls];
+      const nextPrimaryImage = orderedImages[primaryImageIndex];
+
+      if (!nextPrimaryImage) {
+        setIsSavingProduct(false);
+        setRequestError("Selecciona una imagen válida como principal.");
+        setToast({
+          tone: "error",
+          message: "Selecciona una imagen válida como principal.",
+        });
+        return;
+      }
+
+      const reorderedExtraImages = orderedImages.filter(
+        (image, index): image is string =>
+          index !== primaryImageIndex && Boolean(image),
+      );
+
+      const payload = {
+        sku: form.sku,
+        categoria: form.categoria,
+        nombre: form.nombre,
+        marca: form.marca,
+        precioValor: Number(form.precioValor),
+        precioAnteriorValor: Number(form.precioAnteriorValor || form.precioValor),
+        stock: Number(form.stock),
+        stockMinimo: Number(form.stockMinimo),
+        imagen: nextPrimaryImage,
+        imagenesExtra: reorderedExtraImages.slice(0, MAX_EXTRA_IMAGES),
+        disponibilidad: form.disponibilidad,
+        descripcion: form.descripcion,
+        oemReferencia: form.oemReferencia,
+        referenciasAlternas: splitCommaSeparatedValues(form.referenciasAlternas),
+        aplicacion: form.aplicacion,
+        compatibilidad: splitCommaSeparatedValues(form.compatibilidad),
+        garantia: form.garantia,
+        especificacionesTecnicas: normalizeTechnicalSpecFormItems(technicalSpecs),
+        variacionesColor: colorVariants,
+        variacionesPresentacion: presentationVariants,
+        presentacionesAdministradas: true,
+        videoUrl: form.videoUrl,
+        isOutlet: form.isOutlet,
+      };
+      const result = editingSlug
+        ? await updateProduct(editingSlug, payload)
+        : await createProduct(payload);
+
+      setIsSavingProduct(false);
+
+      if (!result.ok) {
+        setRequestError(result.message);
+        setToast({
+          tone: "error",
+          message: result.message,
+        });
+        return;
+      }
+
+      setForm(initialState);
+      setSelectedImage(null);
+      setTechnicalSpecs(withFichaBase([]));
+      setColorVariants([]);
+      setPresentationVariants([]);
+      setSelectedExtraImages(Array.from({ length: EXTRA_IMAGE_SLOTS }, () => null));
+      setExtraSlots(EXTRA_IMAGE_SLOTS);
+      setPrimaryImageIndex(0);
+      setFileInputKey((current) => current + 1);
+      setEditingSlug(null);
+      setActiveTab(null);
+      setSaved(true);
+      setToast({
+        tone: "success",
+        message: isEditing
+          ? "Producto editado correctamente."
+          : "Producto creado correctamente.",
+      });
+      if (isEmbed && window.parent !== window) {
+        window.parent.postMessage(
+          { type: "kliniu:product-created", isEditing },
+          window.location.origin,
+        );
+      }
+      window.setTimeout(() => setSaved(false), 1800);
+    } catch (error) {
+      setIsSavingProduct(false);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "No fue posible subir una de las imágenes.";
+      setRequestError(message);
+      setToast({
+        tone: "error",
+        message,
+      });
+    }
+  };
+
+  const handleEditProduct = (slug: string) => {
+    const product = adminProducts.find((item) => item.slug === slug);
+    if (!product) return;
+
+    const precioAnteriorValor = Number(product.precioAnterior.replace(/\D/g, "")) || product.precioValor;
+
+    setForm({
+      sku: product.sku || "",
+      oemReferencia: product.oemReferencia || "",
+      referenciasAlternas: product.referenciasAlternas?.join(", ") || "",
+      categoria: product.categoria,
+      nombre: product.nombre,
+      marca: product.marca,
+      precioValor: String(product.precioValor),
+      precioAnteriorValor: String(precioAnteriorValor),
+      stock: String(product.stock ?? 0),
+      stockMinimo: String(product.stockMinimo ?? 0),
+      disponibilidad: product.disponibilidad,
+      aplicacion: product.aplicacion || "",
+      compatibilidad: product.compatibilidad?.join(", ") || "",
+      garantia: product.garantia || initialState.garantia,
+      descripcion: product.descripcion || "",
+      videoUrl: product.videoUrl || "",
+      isOutlet: product.esOutlet === true,
+    });
+    setTechnicalSpecs(withFichaBase(product.especificacionesTecnicas || []));
+    setColorVariants(product.variacionesColor ?? []);
+    // Presentaciones: si la ficha aún no las tiene guardadas, se precargan las
+    // del mapa legado TIPO_VARIANTES (Cierre Plástico/Metálico, Bolsa/Botella…)
+    // para poder editar su imagen sin perder el slugSuffix/SKU ya definidos.
+    const presentacionesGuardadas = product.variacionesPresentacion ?? [];
+    const presentacionesLegadas = product.presentacionesAdministradas
+      ? []
+      : TIPO_VARIANTES[product.slug] ?? [];
+    setPresentationVariants(
+      presentacionesGuardadas.length > 0
+        ? presentacionesGuardadas
+        : presentacionesLegadas.map((t) => ({
+            label: t.label,
+            slugSuffix: t.slugSuffix,
+            image: t.image ?? product.imagen,
+            images: t.image ? [t.image] : [product.imagen],
+            sku: t.sku,
+            skuSello: t.skuSello,
+          })),
+    );
+    setEditingSlug(product.slug);
+    setActiveTab("edit");
+    setSelectedImage(null);
+    const slots = Math.max(EXTRA_IMAGE_SLOTS, (product.imagenesExtra ?? []).length);
+    setExtraSlots(slots);
+    setSelectedExtraImages(Array.from({ length: slots }, () => null));
+    setPrimaryImageIndex(0);
+    setRequestError("");
+    setFileInputKey((current) => current + 1);
+  };
+
+  const handleResetForm = () => {
+    setForm(initialState);
+    setSelectedImage(null);
+    setTechnicalSpecs(withFichaBase([]));
+    setColorVariants([]);
+    setPresentationVariants([]);
+    setSelectedExtraImages(Array.from({ length: EXTRA_IMAGE_SLOTS }, () => null));
+    setExtraSlots(EXTRA_IMAGE_SLOTS);
+    setPrimaryImageIndex(0);
+    setEditingSlug(null);
+    setRequestError("");
+    setFileInputKey((current) => current + 1);
+    setSelectedOrderId(null);
+    setOrderSearch("");
+    setOrderShippingFilter("all");
+    setActiveTab(null);
+  };
+
+  const handleDeleteProduct = async (slug: string) => {
+    setRequestError("");
+    setToast(null);
+    const result = await removeProduct(slug);
+
+    if (!result.ok) {
+      setRequestError(result.message);
+      setToast({
+        tone: "error",
+        message: result.message,
+      });
+      return;
+    }
+
+    setToast({
+      tone: "success",
+      message: "Producto eliminado correctamente.",
+    });
+  };
+
+  async function loadInventoryMovements() {
+    setIsLoadingInventory(true);
+    const response = await fetch("/api/inventory");
+    const payload = (await response.json()) as {
+      error?: string;
+      movements?: InventoryMovementSummary[];
+    };
+
+    setIsLoadingInventory(false);
+
+    if (!response.ok || !payload.movements) {
+      setToast({
+        tone: "error",
+        message:
+          payload.error || "No fue posible cargar los movimientos de inventario.",
+      });
+      return;
+    }
+
+    setInventoryMovements(payload.movements);
+  }
+
+  async function loadOrders() {
+    setIsLoadingOrders(true);
+
+    const response = await fetch("/api/orders");
+    const payload = (await response.json()) as {
+      error?: string;
+      orders?: AdminOrder[];
+    };
+
+    setIsLoadingOrders(false);
+
+    if (!response.ok || !payload.orders) {
+      setToast({
+        tone: "error",
+        message: payload.error || "No fue posible cargar los pedidos.",
+      });
+      return;
+    }
+
+    setOrders(payload.orders);
+  }
+
+  const handleQuickInventoryAdjust = async (
+    slug: string,
+    quantity: number,
+    note?: string,
+  ) => {
+    setRequestError("");
+    setToast(null);
+
+    const result = await adjustInventory(slug, quantity, note);
+
+    if (!result.ok) {
+      setToast({
+        tone: "error",
+        message: result.message,
+      });
+      return;
+    }
+
+    setInventoryAdjustments((current) => ({ ...current, [slug]: "" }));
+    setToast({
+      tone: "success",
+      message: "Inventario ajustado correctamente.",
+    });
+    await loadInventoryMovements();
+  };
+
+  const openCreateView = () => {
+    setForm(initialState);
+    setColorVariants([]);
+    setPresentationVariants([]);
+    setSelectedImage(null);
+    setSelectedExtraImages(Array.from({ length: EXTRA_IMAGE_SLOTS }, () => null));
+    setExtraSlots(EXTRA_IMAGE_SLOTS);
+    setPrimaryImageIndex(0);
+    setEditingSlug(null);
+    setRequestError("");
+    setFileInputKey((current) => current + 1);
+    setActiveTab("create");
+  };
+
+  const openCreateOutletView = () => {
+    setForm({ ...initialState, isOutlet: true });
+    setColorVariants([]);
+    setPresentationVariants([]);
+    setSelectedImage(null);
+    setSelectedExtraImages(Array.from({ length: EXTRA_IMAGE_SLOTS }, () => null));
+    setExtraSlots(EXTRA_IMAGE_SLOTS);
+    setPrimaryImageIndex(0);
+    setEditingSlug(null);
+    setRequestError("");
+    setFileInputKey((current) => current + 1);
+    setActiveTab("create");
+  };
+
+  const openEditView = () => {
+    setSelectedImage(null);
+    setRequestError("");
+    setPrimaryImageIndex(0);
+    setActiveTab("edit");
+  };
+
+  const openInventoryView = () => {
+    setSelectedImage(null);
+    setRequestError("");
+    setPrimaryImageIndex(0);
+    setEditingSlug(null);
+    setInventoryStatusFilter("all");
+    setActiveTab("inventory");
+    void loadInventoryMovements();
+  };
+
+  const openOrdersView = () => {
+    setSelectedImage(null);
+    setRequestError("");
+    setPrimaryImageIndex(0);
+    setEditingSlug(null);
+    setOrderShippingFilter("all");
+    setActiveTab("orders");
+    void loadOrders();
+  };
+
+  const handleOrderFieldChange = (
+    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>,
+  ) => {
+    const { name, value } = event.target;
+    setOrderForm((current) => ({
+      ...current,
+      [name]: value,
+    }));
+  };
+
+  const handleSaveOrder = async () => {
+    if (!selectedOrderId) return;
+
+    setIsSavingOrder(true);
+    setToast(null);
+
+    const response = await fetch(`/api/orders/${selectedOrderId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(orderForm),
+    });
+
+    const payload = (await response.json()) as {
+      error?: string;
+      message?: string;
+      order?: AdminOrder;
+    };
+
+    setIsSavingOrder(false);
+
+    if (!response.ok || !payload.order) {
+      setToast({
+        tone: "error",
+        message: payload.error || "No fue posible actualizar el pedido.",
+      });
+      return;
+    }
+
+    setOrders((current) =>
+      current.map((order) => (order.id === payload.order?.id ? payload.order : order)),
+    );
+    setToast({
+      tone: "success",
+      message: payload.message || "Pedido actualizado correctamente.",
+    });
+  };
+
+  if (isCheckingSession) {
+    return (
+      <main className="min-h-screen bg-[#f5f5f5] text-[#111]">
+        <section className="mx-auto flex max-w-[1440px] px-6 py-16">
+          <div className="mx-auto w-full max-w-md rounded-[2rem] border border-black/8 bg-white p-8 text-center shadow-[0_16px_35px_rgba(15,23,42,0.05)]">
+            <p className="text-sm font-semibold uppercase tracking-[0.25em] text-[#D60517]">
+              Administrador
+            </p>
+            <p className="mt-4 text-sm text-[#6e7379]">
+              Verificando acceso al panel...
+            </p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <main className="min-h-screen bg-[#f5f5f5] text-[#111]">
+        <section className="mx-auto flex max-w-[1440px] px-6 py-16">
+          <div className="mx-auto w-full max-w-md rounded-[2rem] border border-black/8 bg-white p-8 text-center shadow-[0_16px_35px_rgba(15,23,42,0.05)]">
+            <p className="text-sm font-semibold uppercase tracking-[0.25em] text-[#D60517]">
+              Administrador
+            </p>
+            <p className="mt-4 text-sm leading-7 text-[#6e7379]">
+              Redirigiendo al ingreso general para validar tu cuenta.
+            </p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className={isEmbed ? "bg-[#f5f5f5] text-[#111]" : "min-h-screen bg-[#f5f5f5] text-[#111]"}>
+      {toast && (
+        <div className="fixed right-5 top-5 z-[80] w-[min(92vw,380px)]">
+          <div
+            className={`rounded-[1.4rem] border px-5 py-4 shadow-[0_18px_45px_rgba(15,23,42,0.16)] backdrop-blur-sm ${
+              toast.tone === "success"
+                ? "border-[#1f8b45]/18 bg-[#effaf2] text-[#1f6b39]"
+                : "border-[#D60517]/18 bg-[#FDEEEF] text-[#051C46]"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em]">
+                  {toast.tone === "success" ? "Correcto" : "Atención"}
+                </p>
+                <p className="mt-2 text-sm font-medium leading-6">{toast.message}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setToast(null)}
+                className="text-lg leading-none opacity-60 transition-opacity duration-200 hover:opacity-100"
+                aria-label="Cerrar notificación"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <section className={isEmbed ? "py-4" : "py-16"}>
+        <div className="space-y-8">
+          {/* Hero solo cuando no hay módulo activo (nunca en embed) */}
+          {!isEmbed && (
+          <div className="admin-fade-up" style={{ display: activeTab ? "none" : "block" }}>
+            {/* Hero full-width */}
+            <div className="relative overflow-hidden" style={{ height: "100vh" }}>
+              {/* Fondo imagen completa */}
+              <Image
+                src="/presservac/acceso-cliente.jpg"
+                alt="Fondo administración"
+                fill
+                priority
+                sizes="100vw"
+                className="object-cover object-center"
+              />
+              {/* Gradiente inferior para legibilidad */}
+              {/* sin overlay — fondo original */}
+
+              {/* Contenido arriba: texto izquierda, botones derecha */}
+              <div className="absolute top-0 left-0 right-0 flex items-start justify-between gap-8 px-16 pt-14">
+                {/* Izquierda: logo + texto */}
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.34em] text-[#051C46]/70">
+                    Flujo de administración
+                  </p>
+                  <h2 className="mt-1 text-3xl font-semibold tracking-[-0.05em] text-[#0a1628]">
+                    Elige el módulo que necesitas
+                  </h2>
+                  <p className="mt-1 text-sm text-[#4a5568]">
+                    {productCountLabel}. Navegación directa para crear, editar, inventario y pedidos.
+                  </p>
+                </div>
+
+                {/* Derecha: botones */}
+                <div className="flex flex-col items-end gap-3">
+                  <div className="flex flex-wrap justify-end gap-3">
+                    {[
+                      { action: openCreateView, label: "Crear producto", icon: <span className="text-sm">+</span>, color: "#051C46" },
+                      { action: openCreateOutletView, label: "Crear Outlet", icon: <span className="text-sm font-black">%</span>, color: "#D60517" },
+                      { action: openEditView, label: "Editar productos", icon: <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="m16.5 3.5 4 4L7 21l-4 1 1-4Z"/></svg>, color: "#D60517" },
+                      { action: openInventoryView, label: "Inventario", icon: <span className="text-sm">≡</span>, color: "#1f8b45" },
+                      { action: openOrdersView, label: "Pedidos y envíos", icon: <span className="text-sm">↗</span>, color: "#6366f1" },
+                    ].map(({ action, label, icon, color }) => (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={action}
+                        className="inline-flex min-h-12 items-center gap-3 rounded-full border border-black/15 bg-white/80 px-4 py-2.5 text-sm font-semibold text-[#051C46] transition-all duration-200 hover:bg-white"
+                      >
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full text-white" style={{ background: color }}>
+                          {icon}
+                        </span>
+                        {label}
+                      </button>
+                    ))}
+                    <a
+                      href="/panel"
+                      className="inline-flex min-h-12 items-center gap-3 rounded-full border border-black/15 bg-white/80 px-4 py-2.5 text-sm font-semibold text-[#051C46] transition-all duration-200 hover:bg-white"
+                    >
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full text-white" style={{ background: "#D60517" }}>
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+                        </svg>
+                      </span>
+                      Panel Comercial
+                    </a>
+                    <button
+                      type="button"
+                      onClick={handleAdminLogout}
+                      disabled={isLoggingOut}
+                      className="inline-flex min-h-12 items-center gap-3 rounded-full border border-red-500/20 bg-white/85 px-4 py-2.5 text-sm font-semibold text-[#8f1f1f] transition-all duration-200 hover:bg-white disabled:cursor-wait disabled:opacity-60"
+                    >
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#b42318] text-white">
+                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                          <path d="M16 17l5-5-5-5" />
+                          <path d="M21 12H9" />
+                        </svg>
+                      </span>
+                      {isLoggingOut ? "Cerrando..." : "Cerrar sesión"}
+                    </button>
+                  </div>
+                  {adminName && (
+                    <p className="pr-2 text-xs font-semibold text-[#051C46]/70">
+                      Sesión activa: {adminName}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          <div className={isEmbed ? "mx-auto max-w-[1440px] px-2" : "mx-auto max-w-[1440px] px-6"}>
+
+          {activeTab && !isEmbed && (
+            <div className="mb-6">
+              <button
+                type="button"
+                onClick={handleResetForm}
+                className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm font-semibold text-[#051C46] shadow-sm transition-colors hover:bg-[#FDEEEF]"
+              >
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>
+                </svg>
+                Volver al inicio
+              </button>
+            </div>
+          )}
+
+          {activeTab === "create" && (
+            <form
+              onSubmit={handleSubmit}
+              className="admin-fade-up rounded-[2rem] border border-black/8 bg-white p-6 shadow-[0_16px_35px_rgba(15,23,42,0.05)] md:p-8"
+            >
+              <div className="mb-8 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#8b8d91]">
+                    {isOutletForm ? "Nuevo producto outlet" : "Nuevo producto"}
+                  </p>
+                  <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                    {isOutletForm ? "Crear producto para Outlet" : "Crear producto"}
+                  </h2>
+                  {isOutletForm && (
+                    <p className="mt-2 text-sm leading-6 text-[#6e7379]">
+                      Este producto quedará marcado como Outlet, además de visible en su categoría real.
+                    </p>
+                  )}
+                </div>
+                {saved && (
+                  <span className="rounded-full bg-[#051C46] px-4 py-2 text-sm font-semibold text-white">
+                    Guardado
+                  </span>
+                )}
+              </div>
+
+                <div className="grid gap-5 md:grid-cols-2">
+                  <label className="space-y-2">
+                    <span className="text-sm font-medium text-[#4f545a]">SKU</span>
+                    <input
+                      name="sku"
+                      value={form.sku}
+                      onChange={handleChange}
+                      placeholder="Ej. FAROLA001"
+                      className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                    />
+                  </label>
+
+                  <label className="space-y-2">
+                    <span className="text-sm font-medium text-[#4f545a]">Categoría</span>
+                    <select
+                    name="categoria"
+                    value={form.categoria}
+                    onChange={handleChange}
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  >
+                    {categorias.map((categoria) => (
+                      <option key={categoria} value={categoria}>
+                        {categoria}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-[#4f545a]">Marca</span>
+                  <input
+                    name="marca"
+                    value={form.marca}
+                    onChange={handleChange}
+                    required
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  />
+                </label>
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-[#4f545a]">Nombre del producto</span>
+                  <input
+                    name="nombre"
+                    value={form.nombre}
+                    onChange={handleChange}
+                    required
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-[#4f545a]">Precio actual</span>
+                  <input
+                    name="precioValor"
+                    type="number"
+                    min="1"
+                    value={form.precioValor}
+                    onChange={handleChange}
+                    required
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-[#4f545a]">Stock actual</span>
+                  <input
+                    name="stock"
+                    type="number"
+                    min="0"
+                    value={form.stock}
+                    onChange={handleChange}
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-[#4f545a]">
+                    {isOutletForm ? "Precio anterior para mostrar descuento" : "Precio anterior"}
+                  </span>
+                  <input
+                    name="precioAnteriorValor"
+                    type="number"
+                    min="1"
+                    value={form.precioAnteriorValor}
+                    onChange={handleChange}
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  />
+                  <p className="text-xs leading-6 text-[#6e7379]">
+                    {isOutletForm
+                      ? "Opcional, pero recomendado para que el outlet muestre el porcentaje de descuento."
+                      : "Opcional. Si lo dejas vacío, se usará el precio actual."}
+                  </p>
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-[#4f545a]">Stock mínimo</span>
+                  <input
+                    name="stockMinimo"
+                    type="number"
+                    min="0"
+                    value={form.stockMinimo}
+                    onChange={handleChange}
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  />
+                </label>
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-[#4f545a]">
+                    Subir imagen a Supabase Storage
+                  </span>
+                  <input
+                    key={fileInputKey}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleImageChange}
+                    required
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 file:mr-4 file:rounded-full file:border-0 file:bg-[#051C46] file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-[#03132F]"
+                  />
+                  <p className="text-xs leading-6 text-[#6e7379]">
+                    Sube la foto directamente aquí. Formatos permitidos: JPG, PNG o WEBP.
+                  </p>
+                  <p className="text-xs leading-6 text-[#6e7379]">
+                    Las imágenes se comprimen automáticamente a WebP 1200×1200 antes de subir. Límite máximo: 15 MB.
+                  </p>
+                  {selectedImage && (
+                    <p className="text-xs leading-6 text-[#051C46]">
+                      Archivo seleccionado: {selectedImage.name} ({Math.round(selectedImage.size / 1024)} KB)
+                    </p>
+                  )}
+                </label>
+
+                <div className="grid gap-5 md:col-span-2 md:grid-cols-3">
+                  {Array.from({ length: extraSlots }, (_, index) => (
+                    <label
+                      key={`create-extra-${index}`}
+                      className="space-y-2 rounded-[1.4rem] border border-black/8 bg-[#fafaf9] p-4"
+                    >
+                      <span className="text-sm font-medium text-[#4f545a]">
+                        Imagen extra {index + 1}
+                      </span>
+                      <input
+                        key={`${fileInputKey}-create-extra-${index}`}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={handleExtraImageChange(index)}
+                        className="w-full rounded-2xl border border-black/10 bg-white px-3 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 file:mr-3 file:rounded-full file:border-0 file:bg-[#051C46] file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:file:bg-[#03132F]"
+                      />
+                      <p className="text-xs leading-6 text-[#6e7379]">
+                        Opcional. Se mostrará como miniatura en la galería.
+                      </p>
+                      {selectedExtraImages[index] && (
+                        <p className="text-xs leading-6 text-[#051C46]">
+                          Archivo: {selectedExtraImages[index]?.name} ({Math.round((selectedExtraImages[index]?.size || 0) / 1024)} KB)
+                        </p>
+                      )}
+                      {previewExtraImageUrls[index] && (
+                        <div className="overflow-hidden rounded-[1rem] border border-black/8 bg-white">
+                          <Image
+                            src={previewExtraImageUrls[index] || ""}
+                            alt={`Vista previa extra ${index + 1}`}
+                            width={500}
+                            height={500}
+                            className="h-28 w-full object-contain bg-white"
+                            unoptimized={previewExtraImageUrls[index]?.startsWith("blob:")}
+                          />
+                        </div>
+                      )}
+                    </label>
+                  ))}
+                </div>
+
+                <div className="md:col-span-2">
+                  <button
+                    type="button"
+                    onClick={addExtraSlot}
+                    disabled={extraSlots >= MAX_EXTRA_IMAGES}
+                    className="inline-flex items-center gap-2 rounded-full border border-[#051C46] px-4 py-2 text-sm font-semibold text-[#051C46] transition-colors hover:bg-[#051C46] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <MdAdd size={18} /> Agregar otra imagen
+                  </button>
+                  <p className="mt-2 text-xs text-[#6e7379]">
+                    {extraSlots} de {MAX_EXTRA_IMAGES} imágenes extra.
+                  </p>
+                </div>
+
+                {previewImageUrl && (
+                  <div className="md:col-span-2 rounded-[1.5rem] border border-black/8 bg-[#fafaf9] p-4">
+                    <p className="text-sm font-medium text-[#4f545a]">
+                      Vista previa de la nueva imagen
+                    </p>
+                    <div className="mt-4 overflow-hidden rounded-[1.25rem] border border-black/8 bg-white">
+                      <Image
+                        src={previewImageUrl}
+                        alt={form.nombre || "Vista previa del producto"}
+                        width={1200}
+                        height={900}
+                        className="h-64 w-full object-contain bg-white"
+                        unoptimized={previewImageUrl.startsWith("blob:")}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <ProductImageSelector
+                  choices={productImageChoices}
+                  primaryImageIndex={primaryImageIndex}
+                  onSelect={setPrimaryImageIndex}
+                  description="Puedes escoger cuál de las imágenes será la principal del producto."
+                />
+
+                <ProductVideoInput
+                  value={form.videoUrl}
+                  onChange={(url) => setForm((c) => ({ ...c, videoUrl: url }))}
+                />
+
+                <ColorVariantsEditor
+                  variants={colorVariants}
+                  onChange={setColorVariants}
+                  galleryImages={[previewImageUrl, ...previewExtraImageUrls].filter((u): u is string => Boolean(u))}
+                />
+
+                <PresentationVariantsEditor
+                  variants={presentationVariants}
+                  onChange={setPresentationVariants}
+                  galleryImages={[previewImageUrl, ...previewExtraImageUrls].filter((u): u is string => Boolean(u))}
+                />
+
+                <TechnicalSpecsEditor
+                  items={technicalSpecs}
+                  onChange={setTechnicalSpecs}
+                />
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-[#4f545a]">Descripción comercial</span>
+                  <textarea
+                    name="descripcion"
+                    value={form.descripcion}
+                    onChange={handleChange}
+                    rows={4}
+                    placeholder="Describe el producto, su uso principal y el beneficio para el cliente."
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm leading-7 text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  />
+                </label>
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-[#4f545a]">Disponibilidad</span>
+                  <select
+                    name="disponibilidad"
+                    value={form.disponibilidad}
+                    onChange={handleChange}
+                    className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                  >
+                    {disponibilidades.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="mt-8 flex flex-wrap gap-3">
+                {requestError && (
+                  <p className="w-full rounded-2xl border border-[#D60517]/20 bg-[#FDEEEF] px-4 py-3 text-sm font-medium text-[#051C46]">
+                    {requestError}
+                  </p>
+                )}
+                <button
+                  type="submit"
+                  disabled={isSavingProduct}
+                  className="inline-flex rounded-full bg-[#D60517] px-6 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#B00413]"
+                >
+                  {isSavingProduct ? "Guardando..." : "Crear producto"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetForm}
+                  className="inline-flex rounded-full border border-black/10 px-6 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+                >
+                  Limpiar
+                </button>
+              </div>
+            </form>
+          )}
+
+          {activeTab === "edit" && (
+            <div className="admin-fade-up space-y-8">
+              {isEmbed && embedSlug && !editingSlug && (
+                <div className="flex items-center justify-center rounded-[2rem] border border-black/8 bg-white p-16 text-sm text-[#6e7379]">
+                  Cargando producto…
+                </div>
+              )}
+              {!(isEmbed && embedSlug) && (
+              <div className="grid gap-8 xl:grid-cols-[300px_minmax(0,1fr)]">
+                <aside className="space-y-5">
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#8b8d91]">
+                      Edición
+                    </p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                      Productos
+                    </h2>
+                    <p className="mt-3 text-sm leading-7 text-[#6e7379]">
+                      Usa la misma lógica visual del catálogo para encontrar el producto y editarlo más rápido.
+                    </p>
+                    {editingSlug && (
+                      <button
+                        type="button"
+                        onClick={handleResetForm}
+                        className="mt-5 inline-flex rounded-full border border-black/10 bg-[#f8f8f7] px-5 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+                      >
+                        Salir de edición
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.24em] text-[#051C46]">
+                      Categorías
+                    </h3>
+                    <div className="mt-4 space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditCategoryFilter("Todas")}
+                        className={`block w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors duration-200 ${
+                          editCategoryFilter === "Todas"
+                            ? "bg-[#051C46] text-white shadow-[0_12px_24px_rgba(22,56,79,0.18)]"
+                            : "bg-[#f8f8f7] text-[#5d6167] hover:bg-[#ececea]"
+                        }`}
+                      >
+                        Todas
+                      </button>
+                      {categorias.map((categoria) => (
+                        <button
+                          key={categoria}
+                          type="button"
+                          onClick={() => setEditCategoryFilter(categoria)}
+                          className={`block w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors duration-200 ${
+                            editCategoryFilter === categoria
+                              ? "bg-[#051C46] text-white shadow-[0_12px_24px_rgba(22,56,79,0.18)]"
+                              : "bg-[#f8f8f7] text-[#5d6167] hover:bg-[#ececea]"
+                          }`}
+                        >
+                          {categoria}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </aside>
+
+                <div className="space-y-8">
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">
+                        Buscar por nombre o marca
+                      </span>
+                      <input
+                        type="search"
+                        value={editSearch}
+                        onChange={(event) => setEditSearch(event.target.value)}
+                        placeholder="Ej: farola, Presservac, ventilador..."
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <p className="mt-4 text-sm text-[#6e7379]">
+                      Mostrando {filteredProducts.length} producto{filteredProducts.length === 1 ? "" : "s"} según los filtros actuales.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                    {filteredProducts.map((product) => {
+                      const inventoryTone = getInventoryTone(product.estadoInventario);
+
+                      return (
+                        <article
+                          key={product.slug}
+                          className={`overflow-hidden rounded-[1.75rem] border bg-white shadow-[0_16px_35px_rgba(15,23,42,0.05)] transition-transform duration-300 hover:-translate-y-1 ${
+                            editingSlug === product.slug
+                              ? "border-[#051C46] ring-2 ring-[#051C46]/12"
+                              : "border-black/8"
+                          }`}
+                        >
+                        <div className="relative">
+                          <span className="absolute left-4 top-4 z-10 rounded-lg bg-[#D60517] px-3 py-1 text-sm font-semibold text-white">
+                            {product.descuento}
+                          </span>
+                          <Image
+                            src={product.imagen}
+                            alt={product.nombre}
+                            width={900}
+                            height={700}
+                            className="h-56 w-full object-cover"
+                          />
+                        </div>
+
+                        <div className="space-y-4 p-5">
+                          <div>
+                            <p className="mb-2 text-xs font-medium uppercase tracking-[0.24em] text-[#8b8d91]">
+                              {product.categoria} · {product.marca}
+                            </p>
+                            <h3 className="text-xl font-semibold leading-tight tracking-[-0.03em] text-[#1f2328]">
+                              {product.nombre}
+                            </h3>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 text-sm">
+                            <span className="text-[#6e7379]">{product.disponibilidad}</span>
+                            <span
+                              className={`rounded-full px-3 py-1 text-xs font-semibold ${inventoryTone.className}`}
+                            >
+                              {inventoryTone.label}
+                            </span>
+                          </div>
+
+                          <div className="rounded-[1rem] border border-black/8 bg-[#fafaf9] px-4 py-3 text-sm text-[#5d6167]">
+                            <div className="flex items-center justify-between gap-3">
+                              <span>SKU</span>
+                              <span className="font-semibold text-[#051C46]">
+                                {product.sku || "Sin SKU"}
+                              </span>
+                            </div>
+                            <div className="mt-2 flex items-center justify-between gap-3">
+                              <span>Stock</span>
+                              <span className="font-semibold text-[#051C46]">
+                                {product.stock ?? 0}
+                              </span>
+                            </div>
+                            <div className="mt-2 flex items-center justify-between gap-3">
+                              <span>Stock mínimo</span>
+                              <span className="font-semibold text-[#051C46]">
+                                {product.stockMinimo ?? 0}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="border-t border-black/6 pt-4">
+                            <p className="text-sm text-[#a0a3a8] line-through">
+                              {product.precioAnterior}
+                            </p>
+                            <p className="text-3xl font-semibold tracking-[-0.03em] text-[#D60517]">
+                              {product.precio}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleEditProduct(product.slug)}
+                              className="inline-flex rounded-full bg-[#051C46] px-5 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#03132F]"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDelete({ slug: product.slug, nombre: product.nombre })}
+                              className="inline-flex rounded-full border border-black/10 px-5 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-red-500 hover:border-red-500 hover:text-white"
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  {filteredProducts.length === 0 && (
+                    <div className="rounded-[1.75rem] border border-dashed border-black/12 bg-white p-10 text-center text-[#6e7379]">
+                      No encontramos productos con ese nombre, marca o categoría.
+                    </div>
+                  )}
+                </div>
+              </div>
+              )}
+
+              {editingSlug && (
+                <form
+                  ref={editFormRef}
+                  onSubmit={handleSubmit}
+                  className="admin-fade-up rounded-[2rem] border border-black/8 bg-white p-6 shadow-[0_16px_35px_rgba(15,23,42,0.05)] md:p-8"
+                >
+                  <div className="mb-8 flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#8b8d91]">
+                        Producto seleccionado
+                      </p>
+                      <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                        Actualizar producto
+                      </h2>
+                    </div>
+                    {saved && (
+                      <span className="rounded-full bg-[#051C46] px-4 py-2 text-sm font-semibold text-white">
+                        Guardado
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid gap-5 md:grid-cols-2">
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">SKU</span>
+                      <input
+                        name="sku"
+                        value={form.sku}
+                        onChange={handleChange}
+                        placeholder="Ej. FAROLA001"
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Categoría</span>
+                      <select
+                        name="categoria"
+                        value={form.categoria}
+                        onChange={handleChange}
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      >
+                        {categorias.map((categoria) => (
+                          <option key={categoria} value={categoria}>
+                            {categoria}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Marca</span>
+                      <input
+                        name="marca"
+                        value={form.marca}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <label className="space-y-2 md:col-span-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Nombre del producto</span>
+                      <input
+                        name="nombre"
+                        value={form.nombre}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Precio actual</span>
+                      <input
+                        name="precioValor"
+                        type="number"
+                        min="1"
+                        value={form.precioValor}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Stock actual</span>
+                      <input
+                        name="stock"
+                        type="number"
+                        min="0"
+                        value={form.stock}
+                        onChange={handleChange}
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Precio anterior</span>
+                      <input
+                        name="precioAnteriorValor"
+                        type="number"
+                        min="1"
+                        value={form.precioAnteriorValor}
+                        onChange={handleChange}
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                      <p className="text-xs leading-6 text-[#6e7379]">
+                        Opcional. Si lo dejas vacío, se usará el precio actual.
+                      </p>
+                    </label>
+                  </div>
+
+                  <div className="mt-6 rounded-2xl border border-black/10 bg-[#fafaf9] p-5">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[#051C46]">Precios por presentación (x12, x48, x100…)</p>
+                        <p className="text-xs text-[#6e7379]">Paquetes con precio total propio, independientes del precio unitario.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={addPack}
+                        className="rounded-full border border-[#051C46] px-3 py-1.5 text-xs font-semibold text-[#051C46] hover:bg-[#051C46]/5"
+                      >
+                        + Agregar
+                      </button>
+                    </div>
+                    {packs.length === 0 ? (
+                      <p className="text-xs text-[#8b8d91]">Este producto no tiene presentaciones configuradas.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {packs.map((p, i) => (
+                          <div key={i} className="grid grid-cols-[90px_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_90px_minmax(0,1fr)_auto]">
+                            <input
+                              value={p.label}
+                              onChange={(e) => updatePack(i, "label", e.target.value)}
+                              placeholder="Ej. x12 und"
+                              className="col-span-3 w-full min-w-0 sm:col-span-1 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-[#D60517]"
+                            />
+                            <input
+                              value={p.qty || ""}
+                              onChange={(e) => updatePack(i, "qty", e.target.value)}
+                              placeholder="Cant."
+                              className="w-full min-w-0 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-[#D60517]"
+                            />
+                            <input
+                              value={p.totalPrice || ""}
+                              onChange={(e) => updatePack(i, "totalPrice", e.target.value)}
+                              placeholder="Precio total"
+                              className="w-full min-w-0 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-[#D60517]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removePack(i)}
+                              className="text-xs font-semibold text-[#DC2626] hover:opacity-70"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mt-3 flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={savePacks}
+                        disabled={packsSaving || !packProductId}
+                        className="rounded-full bg-[#051C46] px-4 py-2 text-xs font-semibold text-white hover:bg-[#03132F] disabled:opacity-60"
+                      >
+                        {packsSaving ? "Guardando…" : "Guardar presentaciones"}
+                      </button>
+                      {packsMsg && (
+                        <span className={`text-xs font-semibold ${packsMsg.type === "ok" ? "text-[#16A34A]" : "text-[#DC2626]"}`}>
+                          {packsMsg.text}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-5 grid gap-5 md:grid-cols-2">
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Stock mínimo</span>
+                      <input
+                        name="stockMinimo"
+                        type="number"
+                        min="0"
+                        value={form.stockMinimo}
+                        onChange={handleChange}
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <label className="space-y-2 md:col-span-2">
+                      <span className="text-sm font-medium text-[#4f545a]">
+                        Cambiar imagen en Supabase Storage
+                      </span>
+                      <input
+                        key={fileInputKey}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={handleImageChange}
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 file:mr-4 file:rounded-full file:border-0 file:bg-[#051C46] file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-[#03132F]"
+                      />
+                      <p className="text-xs leading-6 text-[#6e7379]">
+                        Si no subes una nueva imagen, se conserva la actual.
+                      </p>
+                      {selectedImage && (
+                        <p className="text-xs leading-6 text-[#051C46]">
+                          Archivo seleccionado: {selectedImage.name} ({Math.round(selectedImage.size / 1024)} KB)
+                        </p>
+                      )}
+                    </label>
+
+                    <div className="grid gap-5 md:col-span-2 md:grid-cols-3">
+                      {Array.from({ length: extraSlots }, (_, index) => (
+                        <label
+                          key={`edit-extra-${index}`}
+                          className="space-y-2 rounded-[1.4rem] border border-black/8 bg-[#fafaf9] p-4"
+                        >
+                          <span className="text-sm font-medium text-[#4f545a]">
+                            Imagen extra {index + 1}
+                          </span>
+                          <input
+                            key={`${fileInputKey}-edit-extra-${index}`}
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            onChange={handleExtraImageChange(index)}
+                            className="w-full rounded-2xl border border-black/10 bg-white px-3 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 file:mr-3 file:rounded-full file:border-0 file:bg-[#051C46] file:px-3 file:py-2 file:text-xs file:font-semibold file:text-white hover:file:bg-[#03132F]"
+                          />
+                          <p className="text-xs leading-6 text-[#6e7379]">
+                            Opcional. Si no subes una nueva, se conserva la actual.
+                          </p>
+                          {selectedExtraImages[index] && (
+                            <p className="text-xs leading-6 text-[#051C46]">
+                              Archivo: {selectedExtraImages[index]?.name} ({Math.round((selectedExtraImages[index]?.size || 0) / 1024)} KB)
+                            </p>
+                          )}
+                          {previewExtraImageUrls[index] && (
+                            <div className="overflow-hidden rounded-[1rem] border border-black/8 bg-white">
+                              <Image
+                                src={previewExtraImageUrls[index] || ""}
+                                alt={`Imagen extra ${index + 1}`}
+                                width={500}
+                                height={500}
+                                className="h-28 w-full object-contain bg-white"
+                                unoptimized={previewExtraImageUrls[index]?.startsWith("blob:")}
+                              />
+                            </div>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <button
+                        type="button"
+                        onClick={addExtraSlot}
+                        disabled={extraSlots >= MAX_EXTRA_IMAGES}
+                        className="inline-flex items-center gap-2 rounded-full border border-[#051C46] px-4 py-2 text-sm font-semibold text-[#051C46] transition-colors hover:bg-[#051C46] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <MdAdd size={18} /> Agregar otra imagen
+                      </button>
+                      <p className="mt-2 text-xs text-[#6e7379]">
+                        {extraSlots} de {MAX_EXTRA_IMAGES} imágenes extra.
+                      </p>
+                    </div>
+
+                    {previewImageUrl && (
+                      <div className="md:col-span-2 rounded-[1.5rem] border border-black/8 bg-[#fafaf9] p-4">
+                        <p className="text-sm font-medium text-[#4f545a]">
+                          {selectedImage ? "Vista previa de la nueva imagen" : "Imagen actual del producto"}
+                        </p>
+                        <div className="mt-4 overflow-hidden rounded-[1.25rem] border border-black/8 bg-white">
+                          <Image
+                            src={previewImageUrl}
+                            alt={form.nombre || "Vista previa del producto"}
+                            width={1200}
+                            height={900}
+                            className="h-64 w-full object-contain bg-white"
+                            unoptimized={previewImageUrl.startsWith("blob:")}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <ProductImageSelector
+                      choices={productImageChoices}
+                      primaryImageIndex={primaryImageIndex}
+                      onSelect={setPrimaryImageIndex}
+                      description="La imagen marcada como principal será la que verá primero el cliente."
+                    />
+
+                    <ProductVideoInput
+                      value={form.videoUrl}
+                      onChange={(url) => setForm((c) => ({ ...c, videoUrl: url }))}
+                    />
+
+                    <ColorVariantsEditor
+                      variants={colorVariants}
+                      onChange={setColorVariants}
+                      galleryImages={
+                        editingProduct
+                          ? [editingProduct.imagen, ...(editingProduct.imagenesExtra ?? [])].filter(Boolean)
+                          : []
+                      }
+                    />
+
+                    <PresentationVariantsEditor
+                      variants={presentationVariants}
+                      onChange={setPresentationVariants}
+                      galleryImages={
+                        editingProduct
+                          ? [editingProduct.imagen, ...(editingProduct.imagenesExtra ?? [])].filter(Boolean)
+                          : []
+                      }
+                    />
+
+                    <TechnicalSpecsEditor
+                      items={technicalSpecs}
+                      onChange={setTechnicalSpecs}
+                    />
+
+                    <label className="space-y-2 md:col-span-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Descripción comercial</span>
+                      <textarea
+                        name="descripcion"
+                        value={form.descripcion}
+                        onChange={handleChange}
+                        rows={4}
+                        placeholder="Describe el producto, su uso principal y el beneficio para el cliente."
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm leading-7 text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <label className="space-y-2 md:col-span-2">
+                      <span className="text-sm font-medium text-[#4f545a]">Disponibilidad</span>
+                      <select
+                        name="disponibilidad"
+                        value={form.disponibilidad}
+                        onChange={handleChange}
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      >
+                        {disponibilidades.map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="mt-8 flex flex-wrap gap-3">
+                    {requestError && (
+                      <p className="w-full rounded-2xl border border-[#D60517]/20 bg-[#FDEEEF] px-4 py-3 text-sm font-medium text-[#051C46]">
+                        {requestError}
+                      </p>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={isSavingProduct}
+                      className="inline-flex rounded-full bg-[#D60517] px-6 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#B00413]"
+                    >
+                      {isSavingProduct ? "Guardando..." : "Guardar cambios"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetForm}
+                      className="inline-flex rounded-full border border-black/10 px-6 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+                    >
+                      Cancelar edición
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
+
+          {activeTab === "orders" && (
+            <div className="admin-fade-up space-y-8">
+              <div
+                className={
+                  selectedOrder && selectedOrderPreview
+                    ? "space-y-8"
+                    : "mx-auto w-full max-w-[980px] space-y-5"
+                }
+              >
+                <aside
+                  className={`space-y-5 ${
+                    selectedOrder && selectedOrderPreview ? "hidden" : ""
+                  }`}
+                >
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#8b8d91]">
+                      Pedidos
+                    </p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                      Gestión de envíos
+                    </h2>
+                    <p className="mt-3 text-sm leading-7 text-[#6e7379]">
+                      Aquí controlas el estado logístico del pedido, la transportadora y el número de guía que verá el cliente.
+                    </p>
+                  </div>
+
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">
+                        Buscar por pedido, cliente o guía
+                      </span>
+                      <input
+                        type="search"
+                        value={orderSearch}
+                        onChange={(event) => setOrderSearch(event.target.value)}
+                        placeholder="Ej: cm..., Brandon, 12345..."
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setOrderShippingFilter("all")}
+                        className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                          orderShippingFilter === "all"
+                            ? "bg-[#051C46] text-white"
+                            : "border border-black/10 bg-[#fafaf9] text-[#5d6167] hover:bg-[#ececea]"
+                        }`}
+                      >
+                        Todos
+                      </button>
+                      {shippingStatuses.map((status) => (
+                        <button
+                          key={status}
+                          type="button"
+                          onClick={() => setOrderShippingFilter(status)}
+                          className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                            orderShippingFilter === status
+                              ? "bg-[#6366f1] text-white"
+                              : "border border-black/10 bg-[#fafaf9] text-[#5d6167] hover:bg-[#ececea]"
+                          }`}
+                        >
+                          {getShippingStatusLabel(status)}
+                        </button>
+                      ))}
+                    </div>
+
+                    <p className="mt-5 text-sm text-[#6e7379]">
+                      Mostrando {filteredOrders.length} pedido{filteredOrders.length === 1 ? "" : "s"}.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    {isLoadingOrders ? (
+                      <div className="rounded-[1.5rem] border border-black/8 bg-white p-5 text-sm text-[#6e7379] shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                        Cargando pedidos...
+                      </div>
+                    ) : filteredOrders.length === 0 ? (
+                      <div className="rounded-[1.5rem] border border-dashed border-black/12 bg-white p-5 text-sm leading-7 text-[#6e7379] shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                        Aún no hay pedidos que coincidan con los filtros actuales.
+                      </div>
+                    ) : (
+                      filteredOrders.map((order) => {
+                        const previewItems = order.items
+                          .map((item) => {
+                            const normalizedItemName = normalizeComparableText(item.name);
+                            const fallbackBySlug = item.productId
+                              ? adminProducts.find((product) => product.slug === item.productId)
+                              : null;
+                            const fallbackByName =
+                              fallbackBySlug ||
+                              adminProducts.find((product) => {
+                                const normalizedProductName = normalizeComparableText(product.nombre);
+
+                                return (
+                                  normalizedProductName === normalizedItemName ||
+                                  normalizedProductName.includes(normalizedItemName) ||
+                                  normalizedItemName.includes(normalizedProductName)
+                                );
+                              });
+                            const fallbackImage = item.productId
+                              ? fallbackBySlug?.imagen || fallbackByName?.imagen || null
+                              : null;
+
+                            return {
+                              name: item.name,
+                              image: item.image || fallbackImage || fallbackByName?.imagen || null,
+                            };
+                          })
+                          .filter(
+                            (item): item is { name: string; image: string } => Boolean(item.image),
+                          )
+                          .slice(0, 3);
+
+                        return (
+                          <button
+                            key={order.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedOrderId(order.id);
+                              setOrderForm(getOrderEditState(order));
+                            }}
+                            className={`block w-full rounded-[1.5rem] border px-5 py-5 text-left shadow-[0_14px_28px_rgba(15,23,42,0.05)] transition-all duration-200 ${
+                              selectedOrderId === order.id
+                                ? "border-[#051C46]/22 bg-white shadow-[0_18px_32px_rgba(22,56,79,0.12)] ring-2 ring-[#051C46]/12"
+                                : "border-black/8 bg-white hover:-translate-y-0.5 hover:border-[#051C46]/18"
+                            }`}
+                          >
+                            <div className="grid gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] xl:grid-cols-[minmax(220px,0.9fr)_minmax(320px,1.1fr)_minmax(180px,auto)] xl:items-center">
+                              <div className="min-w-0">
+                                <p className="text-[13px] font-semibold uppercase tracking-[0.22em] text-[#8b8d91]">
+                                  Pedido
+                                </p>
+                                <p className="mt-3 break-words text-[1.42rem] font-semibold leading-tight text-[#1f2328]">
+                                  {order.id}
+                                </p>
+                                <p className="mt-3 text-[15px] text-[#5d6167]">
+                                  {order.customerName} · {order.city}
+                                </p>
+                                <p className="mt-1 text-[15px] text-[#7a7f86]">
+                                  {new Date(order.createdAt).toLocaleDateString("es-CO")} · {order.totalItems} producto
+                                  {order.totalItems === 1 ? "" : "s"}
+                                </p>
+                                <p className="mt-5 text-[1.45rem] font-semibold text-[#D60517]">
+                                  {formatCurrency(order.subtotal)}
+                                </p>
+                                <div className="mt-4 border-t border-black/8 pt-3">
+                                  <p className="line-clamp-2 text-[13px] leading-5 text-[#7a7f86]">
+                                    {order.items[0]?.name || "Pedido con productos varios"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="min-w-0 lg:row-start-2 lg:col-span-2 xl:row-start-auto xl:col-span-1">
+                                {previewItems.length > 0 ? (
+                                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:justify-items-center">
+                                    {previewItems.map((item, index) => (
+                                      <div
+                                        key={`${order.id}-preview-${index}`}
+                                        className="min-w-0 max-w-[118px] text-center"
+                                      >
+                                        <div className="mx-auto h-[94px] w-full overflow-hidden rounded-[0.95rem] border border-black/8 bg-white shadow-[0_10px_20px_rgba(15,23,42,0.12)]">
+                                          <Image
+                                            src={item.image}
+                                            alt={`Producto ${index + 1} del pedido ${order.id}`}
+                                            width={118}
+                                            height={94}
+                                            sizes="118px"
+                                            className="h-full w-full object-cover"
+                                          />
+                                        </div>
+                                        <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-[#5d6167]">
+                                          {item.name || "Producto"}
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="flex h-[94px] w-[118px] items-center justify-center rounded-[0.95rem] border border-black/8 bg-[#051C46] text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-white shadow-[0_10px_20px_rgba(15,23,42,0.12)]">
+                                    {order.items[0]?.name?.slice(0, 2) || "UP"}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-3 lg:justify-end lg:self-start xl:flex-col xl:items-end xl:justify-center">
+                                <span className="rounded-full bg-[#FDEEEF] px-4 py-2 text-sm font-semibold text-[#051C46]">
+                                  {getPaymentStatusLabel(order.paymentStatus)}
+                                </span>
+                                <span className="hidden text-black/20 xl:inline">|</span>
+                                <span className="rounded-full bg-[#effaf2] px-4 py-2 text-sm font-semibold text-[#1f6b39]">
+                                  {getShippingStatusLabel(order.shippingStatus)}
+                                </span>
+                                <span className="ml-auto inline-flex h-10 w-10 items-center justify-center rounded-full text-[#D60517] lg:ml-0">
+                                  <svg
+                                    aria-hidden="true"
+                                    viewBox="0 0 24 24"
+                                    className="h-5 w-5"
+                                    fill="currentColor"
+                                  >
+                                    <path d="m8 5 8 7-8 7z" />
+                                  </svg>
+                                </span>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </aside>
+
+                <div
+                  className={
+                    selectedOrder && selectedOrderPreview ? "space-y-8" : "hidden"
+                  }
+                >
+                  {!selectedOrder || !selectedOrderPreview ? null : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOrderId(null)}
+                        className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white px-5 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+                      >
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 24 24"
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="m15 18-6-6 6-6" />
+                        </svg>
+                        Atrás
+                      </button>
+
+                      <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#8b8d91]">
+                              Pedido seleccionado
+                            </p>
+                            <h3 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                              {selectedOrderPreview.id}
+                            </h3>
+                            <p className="mt-3 text-sm leading-7 text-[#6e7379]">
+                              {selectedOrderPreview.customerName} · {selectedOrderPreview.customerEmail} · {selectedOrderPreview.customerPhone}
+                            </p>
+                            <p className="text-sm leading-7 text-[#6e7379]">
+                              {selectedOrderPreview.department}, {selectedOrderPreview.city} · {selectedOrderPreview.addressLine1}
+                              {selectedOrderPreview.addressLine2 ? ` · ${selectedOrderPreview.addressLine2}` : ""}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <span className="rounded-full bg-[#051C46] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-white">
+                              {selectedOrderPreview.status}
+                            </span>
+                            <span className="rounded-full border border-[#D60517]/18 bg-[#FDEEEF] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#051C46]">
+                              {getPaymentStatusLabel(selectedOrderPreview.paymentStatus)}
+                            </span>
+                            <span className="rounded-full border border-[#1f8b45]/18 bg-[#effaf2] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#1f6b39]">
+                              {getShippingStatusLabel(selectedOrderPreview.shippingStatus)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_320px]">
+                          <div className="rounded-[1.4rem] border border-black/8 bg-[#fafaf9] p-5">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#8b8d91]">
+                                  Resumen del pedido
+                                </p>
+                                <p className="mt-2 text-sm text-[#6e7379]">
+                                  Revisa qué compró el cliente antes de actualizar envío y guía.
+                                </p>
+                              </div>
+                              <span className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#051C46] shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
+                                {selectedOrderPreview.totalItems} producto
+                                {selectedOrderPreview.totalItems === 1 ? "" : "s"}
+                              </span>
+                            </div>
+
+                            <div className="mt-5 space-y-3">
+                              {selectedOrderPreview.items.map((item) => (
+                                <div
+                                  key={`summary-${item.id}`}
+                                  className="rounded-[1rem] border border-black/8 bg-white px-4 py-4"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <p className="text-sm font-semibold text-[#1f2328]">
+                                        {item.name}
+                                      </p>
+                                      <p className="mt-2 text-xs uppercase tracking-[0.18em] text-[#8b8d91]">
+                                        Cantidad
+                                      </p>
+                                      <p className="mt-1 text-sm font-medium text-[#5d6167]">
+                                        {item.quantity}
+                                      </p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xs uppercase tracking-[0.18em] text-[#8b8d91]">
+                                        Precio unidad
+                                      </p>
+                                      <p className="mt-1 text-sm font-semibold text-[#051C46]">
+                                        {formatCurrency(item.unitPrice)}
+                                      </p>
+                                      <p className="mt-3 text-xs uppercase tracking-[0.18em] text-[#8b8d91]">
+                                        Subtotal
+                                      </p>
+                                      <p className="mt-1 text-sm font-semibold text-[#D60517]">
+                                        {formatCurrency(item.lineTotal)}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="grid gap-3">
+                            <div className="rounded-[1.4rem] border border-black/8 bg-[#fafaf9] px-5 py-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b8d91]">
+                                Total del pedido
+                              </p>
+                              <p className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-[#D60517]">
+                                {formatCurrency(selectedOrderPreview.subtotal)}
+                              </p>
+                            </div>
+                            <div className="rounded-[1.4rem] border border-black/8 bg-[#fafaf9] px-5 py-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b8d91]">
+                                Transportadora actual
+                              </p>
+                              <p className="mt-2 text-sm font-semibold text-[#051C46]">
+                                {selectedOrderPreview.carrier || "Por definir"}
+                              </p>
+                            </div>
+                            <div className="rounded-[1.4rem] border border-black/8 bg-[#fafaf9] px-5 py-4">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b8d91]">
+                                Guía actual
+                              </p>
+                              <p className="mt-2 text-sm font-semibold text-[#051C46]">
+                                {selectedOrderPreview.trackingNumber || "Aún no asignada"}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-6">
+                          <AdminOrderProgress order={selectedOrderPreview} />
+                        </div>
+
+                        <div className="mt-6 grid gap-5 md:grid-cols-2">
+                          <label className="space-y-2">
+                            <span className="text-sm font-medium text-[#4f545a]">Estado de envío</span>
+                            <select
+                              name="shippingStatus"
+                              value={orderForm.shippingStatus}
+                              onChange={handleOrderFieldChange}
+                              className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                            >
+                              {shippingStatuses.map((status) => (
+                                <option key={status} value={status}>
+                                  {getShippingStatusLabel(status)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="space-y-2">
+                            <span className="text-sm font-medium text-[#4f545a]">Estado de pago</span>
+                            <select
+                              name="paymentStatus"
+                              value={orderForm.paymentStatus}
+                              onChange={handleOrderFieldChange}
+                              className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                            >
+                              {paymentStatuses.map((status) => (
+                                <option key={status} value={status}>
+                                  {getPaymentStatusLabel(status)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="space-y-2">
+                            <span className="text-sm font-medium text-[#4f545a]">Transportadora</span>
+                            <input
+                              name="carrier"
+                              value={orderForm.carrier}
+                              onChange={handleOrderFieldChange}
+                              placeholder="Ej. Coordinadora, Servientrega..."
+                              className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                            />
+                          </label>
+
+                          <label className="space-y-2">
+                            <span className="text-sm font-medium text-[#4f545a]">Número de guía</span>
+                            <input
+                              name="trackingNumber"
+                              value={orderForm.trackingNumber}
+                              onChange={handleOrderFieldChange}
+                              placeholder="Ej. 123456789"
+                              className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                            />
+                          </label>
+
+                          <label className="space-y-2 md:col-span-2">
+                            <span className="text-sm font-medium text-[#4f545a]">Notas internas del envío</span>
+                            <textarea
+                              name="adminNotes"
+                              value={orderForm.adminNotes}
+                              onChange={handleOrderFieldChange}
+                              rows={4}
+                              placeholder="Ej. Sale hoy en la tarde, cliente pidió entregar en portería..."
+                              className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="mt-6 flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            onClick={handleSaveOrder}
+                            disabled={isSavingOrder}
+                            className="inline-flex rounded-full bg-[#051C46] px-6 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#03132F] disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            {isSavingOrder ? "Guardando..." : "Actualizar pedido"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void loadOrders()}
+                            className="inline-flex rounded-full border border-black/10 px-6 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+                          >
+                            Recargar pedidos
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                        <h3 className="text-2xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                          Productos del pedido
+                        </h3>
+                        <div className="mt-5 grid gap-3 md:grid-cols-2">
+                          {selectedOrder.items.map((item) => (
+                            <div
+                              key={item.id}
+                              className="rounded-[1.1rem] border border-black/8 bg-[#fafaf9] px-4 py-4"
+                            >
+                              <p className="text-sm font-semibold text-[#1f2328]">{item.name}</p>
+                              <div className="mt-2 flex items-center justify-between text-sm text-[#6e7379]">
+                                <span>Cantidad: {item.quantity}</span>
+                                <span className="font-semibold text-[#051C46]">
+                                  {formatCurrency(item.unitPrice)}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-black/8 pt-4 text-sm">
+                          <span className="text-[#6e7379]">
+                            {selectedOrder.totalItems} producto{selectedOrder.totalItems === 1 ? "" : "s"}
+                          </span>
+                          <span className="text-lg font-semibold text-[#D60517]">
+                            {formatCurrency(selectedOrder.subtotal)}
+                          </span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "inventory" && (
+            <div className="admin-fade-up space-y-8">
+              <div className="grid gap-8 xl:grid-cols-[300px_minmax(0,1fr)]">
+                <aside className="space-y-5">
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#8b8d91]">
+                      Inventario
+                    </p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                      Control rápido
+                    </h2>
+                    <p className="mt-3 text-sm leading-7 text-[#6e7379]">
+                      Ajusta existencias sin abrir el editor completo y revisa los últimos movimientos del stock.
+                    </p>
+                  </div>
+
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.24em] text-[#051C46]">
+                      Categorías
+                    </h3>
+                    <div className="mt-4 space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditCategoryFilter("Todas")}
+                        className={`block w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors duration-200 ${
+                          editCategoryFilter === "Todas"
+                            ? "bg-[#051C46] text-white shadow-[0_12px_24px_rgba(22,56,79,0.18)]"
+                            : "bg-[#f8f8f7] text-[#5d6167] hover:bg-[#ececea]"
+                        }`}
+                      >
+                        Todas
+                      </button>
+                      {categorias.map((categoria) => (
+                        <button
+                          key={categoria}
+                          type="button"
+                          onClick={() => setEditCategoryFilter(categoria)}
+                          className={`block w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors duration-200 ${
+                            editCategoryFilter === categoria
+                              ? "bg-[#051C46] text-white shadow-[0_12px_24px_rgba(22,56,79,0.18)]"
+                              : "bg-[#f8f8f7] text-[#5d6167] hover:bg-[#ececea]"
+                          }`}
+                        >
+                          {categoria}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </aside>
+
+                <div className="space-y-8">
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-[#4f545a]">
+                        Buscar por nombre, marca o SKU
+                      </span>
+                      <input
+                        type="search"
+                        value={editSearch}
+                        onChange={(event) => setEditSearch(event.target.value)}
+                        placeholder="Ej: farola, Presservac, FAROLA001..."
+                        className="w-full rounded-2xl border border-black/10 bg-[#fafaf9] px-4 py-3 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                      />
+                    </label>
+
+                    <p className="mt-4 text-sm text-[#6e7379]">
+                      Mostrando {filteredProducts.length} producto{filteredProducts.length === 1 ? "" : "s"} para control de stock.
+                    </p>
+
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setInventoryStatusFilter("all")}
+                        className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                          inventoryStatusFilter === "all"
+                            ? "bg-[#051C46] text-white"
+                            : "border border-black/10 bg-[#fafaf9] text-[#5d6167] hover:bg-[#ececea]"
+                        }`}
+                      >
+                        Todos
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInventoryStatusFilter("low-stock")}
+                        className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                          inventoryStatusFilter === "low-stock"
+                            ? "bg-[#D60517] text-white"
+                            : "border border-[#D60517]/20 bg-[#FDEEEF] text-[#051C46] hover:bg-[#D8F1EE]"
+                        }`}
+                      >
+                        Solo stock bajo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInventoryStatusFilter("out-of-stock")}
+                        className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
+                          inventoryStatusFilter === "out-of-stock"
+                            ? "bg-[#c53b3b] text-white"
+                            : "border border-[#c53b3b]/20 bg-[#fff1f1] text-[#c53b3b] hover:bg-[#ffe2e2]"
+                        }`}
+                      >
+                        Solo agotados
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4">
+                    {filteredProducts.map((product) => {
+                      const inventoryTone = getInventoryTone(product.estadoInventario);
+                      const adjustmentValue = inventoryAdjustments[product.slug] || "";
+
+                      return (
+                        <article
+                          key={`inventory-${product.slug}`}
+                          className="rounded-[1.5rem] border border-black/8 bg-white p-5 shadow-[0_14px_28px_rgba(15,23,42,0.05)]"
+                        >
+                          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="flex min-w-0 items-center gap-4">
+                              <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-[1rem] border border-black/8 bg-[#fafaf9]">
+                                <Image
+                                  src={product.imagen}
+                                  alt={product.nombre}
+                                  fill
+                                  sizes="96px"
+                                  className="object-cover"
+                                />
+                              </div>
+
+                              <div className="min-w-0">
+                                <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#8b8d91]">
+                                  {product.categoria} · {product.marca}
+                                </p>
+                                <h3 className="mt-2 text-xl font-semibold tracking-[-0.03em] text-[#1f2328]">
+                                  {product.nombre}
+                                </h3>
+                                <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                                  <span className="rounded-full border border-black/8 bg-[#fafaf9] px-3 py-1 text-[#5d6167]">
+                                    SKU: {product.sku || "Sin SKU"}
+                                  </span>
+                                  <span className={`rounded-full px-3 py-1 font-semibold ${inventoryTone.className}`}>
+                                    {inventoryTone.label}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[540px]">
+                              <div className="rounded-[1.1rem] border border-black/8 bg-[#fafaf9] px-4 py-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b8d91]">
+                                  Stock actual
+                                </p>
+                                <p className="mt-2 text-2xl font-semibold text-[#051C46]">
+                                  {product.stock ?? 0}
+                                </p>
+                              </div>
+
+                              <div className="rounded-[1.1rem] border border-black/8 bg-[#fafaf9] px-4 py-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b8d91]">
+                                  Stock mínimo
+                                </p>
+                                <p className="mt-2 text-2xl font-semibold text-[#051C46]">
+                                  {product.stockMinimo ?? 0}
+                                </p>
+                              </div>
+
+                              <div className="rounded-[1.1rem] border border-black/8 bg-[#fafaf9] px-4 py-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8b8d91]">
+                                  Ajuste rápido
+                                </p>
+                                <input
+                                  type="number"
+                                  value={adjustmentValue}
+                                  onChange={(event) =>
+                                    setInventoryAdjustments((current) => ({
+                                      ...current,
+                                      [product.slug]: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="+5 o -2"
+                                  className="mt-2 w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm text-[#1f2328] outline-none transition-colors duration-200 focus:border-[#D60517]"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap gap-3">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleQuickInventoryAdjust(
+                                  product.slug,
+                                  Number(adjustmentValue || 0),
+                                )
+                              }
+                              className="inline-flex rounded-full bg-[#051C46] px-5 py-3 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#03132F]"
+                            >
+                              Aplicar ajuste
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleQuickInventoryAdjust(
+                                  product.slug,
+                                  1,
+                                  "Entrada rápida de una unidad",
+                                )
+                              }
+                              className="inline-flex rounded-full border border-[#1f8b45]/20 bg-[#effaf2] px-5 py-3 text-sm font-semibold text-[#1f6b39] transition-colors duration-200 hover:bg-[#dcf5e4]"
+                            >
+                              +1 unidad
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleQuickInventoryAdjust(
+                                  product.slug,
+                                  -1,
+                                  "Salida rápida de una unidad",
+                                )
+                              }
+                              className="inline-flex rounded-full border border-[#D60517]/20 bg-[#FDEEEF] px-5 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#D8F1EE]"
+                            >
+                              -1 unidad
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleEditProduct(product.slug)}
+                              className="inline-flex rounded-full border border-black/10 px-5 py-3 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+                            >
+                              Editar completo
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  <div className="rounded-[1.75rem] border border-black/8 bg-white p-6 shadow-[0_14px_28px_rgba(15,23,42,0.05)]">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#8b8d91]">
+                          Movimientos
+                        </p>
+                        <h3 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-[#051C46]">
+                          Últimos cambios de inventario
+                        </h3>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void loadInventoryMovements()}
+                        className="inline-flex rounded-full border border-black/10 px-4 py-2 text-sm font-semibold text-[#051C46] transition-colors duration-200 hover:bg-[#051C46] hover:text-white"
+                      >
+                        Recargar
+                      </button>
+                    </div>
+
+                    <div className="mt-5 space-y-3">
+                      {isLoadingInventory ? (
+                        <p className="text-sm text-[#6e7379]">Cargando movimientos...</p>
+                      ) : inventoryMovements.length === 0 ? (
+                        <p className="text-sm text-[#6e7379]">
+                          Aún no hay movimientos recientes para mostrar.
+                        </p>
+                      ) : (
+                        inventoryMovements.map((movement) => (
+                          <div
+                            key={movement.id}
+                            className="rounded-[1.1rem] border border-black/8 bg-[#fafaf9] px-4 py-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-[#1f2328]">
+                                  {movement.productName}
+                                </p>
+                                <p className="mt-1 text-xs uppercase tracking-[0.18em] text-[#8b8d91]">
+                                  {movement.productSku || "Sin SKU"} · {movement.type}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className={`text-sm font-semibold ${movement.quantity >= 0 ? "text-[#1f6b39]" : "text-[#051C46]"}`}>
+                                  {movement.quantity > 0 ? `+${movement.quantity}` : movement.quantity}
+                                </p>
+                                <p className="mt-1 text-xs text-[#6e7379]">
+                                  Stock final: {movement.stockAfter}
+                                </p>
+                              </div>
+                            </div>
+                            {movement.note && (
+                              <p className="mt-3 text-sm text-[#5d6167]">{movement.note}</p>
+                            )}
+                            <p className="mt-2 text-xs text-[#8b8d91]">
+                              {new Date(movement.createdAt).toLocaleString("es-CO")}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          </div>
+        </div>
+      </section>
+
+      {/* Modal confirmación eliminar */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-black/8 bg-white p-6 shadow-2xl">
+            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-full bg-red-50">
+              <svg viewBox="0 0 24 24" className="h-5 w-5 text-red-500" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                <path d="M10 11v6M14 11v6" />
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+              </svg>
+            </div>
+            <h3 className="mt-3 text-base font-bold text-[#111]">¿Eliminar producto?</h3>
+            <p className="mt-1 text-sm text-[#6e7379]">
+              <span className="font-semibold text-[#111]">{confirmDelete.nombre}</span> será eliminado permanentemente. Esta acción no se puede deshacer.
+            </p>
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(null)}
+                className="flex-1 rounded-full border border-black/10 py-2.5 text-sm font-semibold text-[#333] transition-colors hover:bg-[#f5f5f5]"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const slug = confirmDelete.slug;
+                  setConfirmDelete(null);
+                  await handleDeleteProduct(slug);
+                }}
+                className="flex-1 rounded-full bg-red-500 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-600"
+              >
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}

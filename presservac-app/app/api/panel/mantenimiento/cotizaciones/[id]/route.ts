@@ -1,0 +1,25 @@
+import { requirePermission } from "@/lib/permissions";
+import { updateQuote } from "@/lib/maintenance";
+import { normalizeAttachments } from "@/lib/maintenance-upload";
+import type { MaintenanceQuoteStatus } from "@/generated/prisma/client";
+import { broadcastPanelUpdate } from "@/lib/realtime";
+
+const STATUSES: MaintenanceQuoteStatus[] = ["REQUESTED", "APPROVED", "REJECTED", "PURCHASED"];
+
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const access = await requirePermission("MODULE_MANTENIMIENTO", "edit");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+
+  const { id } = await params;
+  const body = (await request.json()) as { status?: MaintenanceQuoteStatus; amount?: number; attachments?: unknown };
+  if (body.status && !STATUSES.includes(body.status)) return Response.json({ error: "Estado inválido" }, { status: 400 });
+  if (body.amount !== undefined && (typeof body.amount !== "number" || !Number.isFinite(body.amount) || body.amount <= 0)) return Response.json({ error: "Monto inválido" }, { status: 400 });
+
+  const quote = await updateQuote(id, {
+    status: body.status,
+    amount: body.amount,
+    attachments: body.attachments !== undefined ? normalizeAttachments(body.attachments) : undefined,
+  });
+  broadcastPanelUpdate("maintenance").catch(() => {});
+  return Response.json({ quote });
+}

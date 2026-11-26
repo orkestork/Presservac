@@ -1,0 +1,59 @@
+import { requirePermission } from "@/lib/permissions";
+import { prisma } from "@/lib/prisma";
+import { deleteQuotationItem, updateQuotationItem, type QuotationItemInput } from "@/lib/panel";
+import { broadcastPanelUpdate } from "@/lib/realtime";
+
+async function checkAccess(itemId: string, session: { role: string; userId: string }) {
+  if (!prisma) return { error: "DB no disponible", status: 503 as const };
+  const item = await prisma.quotationItem.findUnique({ where: { id: itemId }, include: { quotation: true } });
+  if (!item) return { error: "Ítem no encontrado", status: 404 as const };
+  if (session.role !== "ADMIN" && item.quotation.sellerId !== session.userId) {
+    return { error: "Sin permiso", status: 403 as const };
+  }
+  return { item };
+}
+
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const access = await requirePermission("MODULE_COTIZACIONES", "edit");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  const { session } = access;
+  const { id } = await params;
+  const scoped = await checkAccess(id, session);
+  if ("error" in scoped) return Response.json({ error: scoped.error }, { status: scoped.status });
+
+  const body = await request.json() as QuotationItemInput;
+
+  try {
+    const updated = await updateQuotationItem(id, body);
+    broadcastPanelUpdate("quotations").catch(() => {});
+    return Response.json(updated);
+  } catch (e) {
+    if (e instanceof Error && e.message === "NOT_EDITABLE") {
+      return Response.json({ error: "Solo se puede editar en borrador" }, { status: 409 });
+    }
+    if (e instanceof Error && e.message === "PRODUCT_NOT_FOUND") {
+      return Response.json({ error: "Producto no encontrado" }, { status: 404 });
+    }
+    return Response.json({ error: "Error interno" }, { status: 500 });
+  }
+}
+
+export async function DELETE(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  const access = await requirePermission("MODULE_COTIZACIONES", "delete");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  const { session } = access;
+  const { id } = await params;
+  const scoped = await checkAccess(id, session);
+  if ("error" in scoped) return Response.json({ error: scoped.error }, { status: scoped.status });
+
+  try {
+    await deleteQuotationItem(id);
+    broadcastPanelUpdate("quotations").catch(() => {});
+    return Response.json({ ok: true });
+  } catch (e) {
+    if (e instanceof Error && e.message === "NOT_EDITABLE") {
+      return Response.json({ error: "Solo se puede editar en borrador" }, { status: 409 });
+    }
+    return Response.json({ error: "Error interno" }, { status: 500 });
+  }
+}

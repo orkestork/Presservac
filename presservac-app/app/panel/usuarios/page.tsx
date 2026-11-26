@@ -1,0 +1,1369 @@
+"use client";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_PERMISSIONS } from "@/lib/permission-defaults";
+import { SimpleSelect } from "../_components/simple-select";
+import { useRealtimeRefresh } from "@/lib/hooks/use-realtime-refresh";
+import {
+  MdDashboard, MdInventory2, MdCategory, MdBarChart, MdCampaign, MdAttachMoney,
+  MdCalculate, MdDescription, MdPrecisionManufacturing, MdSync, MdPeople,
+  MdViewCarousel, MdGridView, MdLocalOffer, MdBadge, MdSell, MdWarehouse,
+  MdChat, MdFolder, MdLocalShipping, MdBuild, MdConfirmationNumber, MdChecklist, MdPalette, MdVerified,
+} from "react-icons/md";
+import type { IconType } from "react-icons";
+import { SkeletonPanelPage } from "../../components/skeleton";
+
+type Role = "CUSTOMER" | "ADMIN" | "SELLER" | "PACKING" | "SUPERADMIN" | "RRHH" | "BODEGA" | "DISENO" | "MARKETING" | "JEFE_VENTAS" | "TESORERIA" | "INGENIERIA" | "LOGISTICA" | "LIDER_ENSAMBLE" | "LIDER_INYECCION" | "MANTENIMIENTO" | "JEFE_OPERACIONES" | "DIRECTOR_OPERACIONES" | "OPERARIO";
+type Status = "ACTIVE" | "INACTIVE" | "SUSPENDED";
+
+type UserRow = {
+  id: string;
+  fullName: string;
+  email: string;
+  whatsappPhone: string | null;
+  backupUserId: string | null;
+  avatarUrl: string | null;
+  role: Role;
+  status: Status;
+  createdAt: string;
+};
+
+type DeletionImpact = {
+  orders: number;
+  quotations: number;
+  campaigns: number;
+  productionRuns: number;
+  productionOrders: number;
+  priceHistory: number;
+  sellerConfig: number;
+  ordersUnassigned: number;
+  productionOrdersUnapproved: number;
+};
+
+type ModulePermission = {
+  module: string;
+  isOverride: boolean;
+  canView: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+};
+
+const MODULE_LABELS: Record<string, string> = {
+  MODULE_DASHBOARD: "Dashboard",
+  MODULE_PEDIDOS: "Pedidos",
+  MODULE_PRODUCTOS: "Productos",
+  MODULE_METRICAS: "Métricas",
+  MODULE_CAMPANAS: "Campañas",
+  MODULE_COSTOS: "Costos",
+  MODULE_CALCULADORA_PRECIO: "Precio de Venta",
+  MODULE_COTIZACIONES: "Cotizaciones",
+  MODULE_PRODUCCION: "Inyección",
+  MODULE_ODOO: "Odoo",
+  MODULE_USUARIOS: "Usuarios",
+  MODULE_BANNERS: "Banners",
+  MODULE_COMBOS: "Combos",
+  MODULE_MIS_COMBOS: "Mis Combos",
+  MODULE_RRHH: "Recursos Humanos",
+  MODULE_OUTLET: "Outlet",
+  MODULE_BODEGAS: "Bodegas",
+  MODULE_WHATSAPP: "WhatsApp",
+  MODULE_MATERIAL: "Material Comercial",
+  MODULE_LOGISTICA: "Logística",
+  MODULE_MANTENIMIENTO: "Mantenimiento",
+  MODULE_ENSAMBLE: "Ensamble",
+  MODULE_TICKETS: "Solicitudes (PQRS)",
+  MODULE_TAREAS: "Tareas",
+  MODULE_DISENO: "Diseño (artes)",
+  MODULE_DISENO_APROBAR: "Diseño · aprobación interna",
+  MODULE_PLANTA: "Producción de empaques",
+  MODULE_FINANZAS: "Financiera (confirmar pagos)",
+};
+
+const ROLES: Role[] = ["CUSTOMER", "ADMIN", "SELLER", "PACKING", "SUPERADMIN", "RRHH", "BODEGA", "DISENO", "MARKETING", "JEFE_VENTAS", "TESORERIA", "INGENIERIA", "LOGISTICA", "LIDER_ENSAMBLE", "LIDER_INYECCION", "MANTENIMIENTO", "JEFE_OPERACIONES", "DIRECTOR_OPERACIONES", "OPERARIO"];
+const STATUSES: Status[] = ["ACTIVE", "INACTIVE", "SUSPENDED"];
+
+const ROLE_LABELS: Record<Role, string> = {
+  CUSTOMER: "Cliente",
+  ADMIN: "Administrador",
+  SELLER: "Vendedor",
+  PACKING: "Empaque",
+  SUPERADMIN: "Superadmin",
+  RRHH: "Recursos Humanos",
+  BODEGA: "Bodega",
+  DISENO: "Diseño",
+  MARKETING: "Marketing",
+  JEFE_VENTAS: "Jefe de Ventas",
+  TESORERIA: "Tesorería",
+  INGENIERIA: "Ingeniería",
+  LOGISTICA: "Logística",
+  LIDER_ENSAMBLE: "Líder Planta Ensamble",
+  LIDER_INYECCION: "Líder Planta Inyección",
+  MANTENIMIENTO: "Mantenimiento",
+  JEFE_OPERACIONES: "Jefe de Operaciones",
+  DIRECTOR_OPERACIONES: "Director de Operaciones",
+  OPERARIO: "Operario de Planta",
+};
+
+const ROLE_DESCRIPTIONS: Record<Role, string> = {
+  CUSTOMER: "Puede ver sus pedidos y compras.",
+  ADMIN: "Acceso completo a la administración del sistema.",
+  SELLER: "Puede gestionar ventas y sus pedidos.",
+  PACKING: "Encargado del empaque y despacho de pedidos.",
+  SUPERADMIN: "Control total, sin restricciones de permisos.",
+  RRHH: "Gestiona la información del personal.",
+  BODEGA: "Administra inventario y bodegas.",
+  DISENO: "Gestiona piezas y material de diseño.",
+  MARKETING: "Administra campañas y contenido.",
+  JEFE_VENTAS: "Supervisa al equipo de ventas y sus pedidos.",
+  TESORERIA: "Gestiona pagos y movimientos financieros.",
+  INGENIERIA: "Acceso a procesos técnicos y de producción.",
+  LOGISTICA: "Coordina envíos y entregas.",
+  LIDER_ENSAMBLE: "Supervisa la planta de ensamble.",
+  LIDER_INYECCION: "Supervisa la planta de inyección.",
+  MANTENIMIENTO: "Gestiona mantenimiento de equipos.",
+  JEFE_OPERACIONES: "Supervisa la operación general.",
+  DIRECTOR_OPERACIONES: "Dirige las operaciones de la empresa.",
+  OPERARIO: "Registra sus bloques de producción en planta.",
+};
+
+const STATUS_LABELS: Record<Status, string> = {
+  ACTIVE: "Activo",
+  INACTIVE: "Inactivo",
+  SUSPENDED: "Suspendido",
+};
+
+const ROLE_BADGE: Record<Role, string> = {
+  CUSTOMER: "bg-[#F1F5F9] text-[#64748B]",
+  ADMIN: "bg-[#DBEAFE] text-[#1D4ED8]",
+  SELLER: "bg-[#D9F2F3] text-[#0B2E6B]",
+  PACKING: "bg-[#FFEDD5] text-[#C2410C]",
+  SUPERADMIN: "bg-[#EDE9FE] text-[#6D28D9]",
+  RRHH: "bg-[#FCE7F3] text-[#BE185D]",
+  BODEGA: "bg-[#FEF3C7] text-[#B45309]",
+  DISENO: "bg-[#FCE7F3] text-[#BE185D]",
+  MARKETING: "bg-[#DCFCE7] text-[#15803D]",
+  JEFE_VENTAS: "bg-[#DBEAFE] text-[#1D4ED8]",
+  TESORERIA: "bg-[#EDE9FE] text-[#6D28D9]",
+  INGENIERIA: "bg-[#FEE2E2] text-[#DC2626]",
+  LOGISTICA: "bg-[#E0F2FE] text-[#0369A1]",
+  LIDER_ENSAMBLE: "bg-[#DBEAFE] text-[#1D4ED8]",
+  LIDER_INYECCION: "bg-[#DBEAFE] text-[#1D4ED8]",
+  MANTENIMIENTO: "bg-[#FFEDD5] text-[#C2410C]",
+  JEFE_OPERACIONES: "bg-[#EDE9FE] text-[#6D28D9]",
+  DIRECTOR_OPERACIONES: "bg-[#EDE9FE] text-[#6D28D9]",
+  OPERARIO: "bg-[#E0F2FE] text-[#0369A1]",
+};
+
+const STATUS_DOT: Record<Status, string> = {
+  ACTIVE: "bg-[#16A34A]",
+  INACTIVE: "bg-[#94A3B8]",
+  SUSPENDED: "bg-[#DC2626]",
+};
+
+const STATUS_TEXT: Record<Status, string> = {
+  ACTIVE: "text-[#16A34A]",
+  INACTIVE: "text-[#64748B]",
+  SUSPENDED: "text-[#DC2626]",
+};
+
+const MODULE_ICON: Record<string, { Icon: IconType; className: string }> = {
+  MODULE_DASHBOARD: { Icon: MdDashboard, className: "bg-[#DBEAFE] text-[#1D4ED8]" },
+  MODULE_PEDIDOS: { Icon: MdInventory2, className: "bg-[#DCFCE7] text-[#15803D]" },
+  MODULE_PRODUCTOS: { Icon: MdCategory, className: "bg-[#EDE9FE] text-[#6D28D9]" },
+  MODULE_METRICAS: { Icon: MdBarChart, className: "bg-[#FFEDD5] text-[#C2410C]" },
+  MODULE_CAMPANAS: { Icon: MdCampaign, className: "bg-[#FCE7F3] text-[#BE185D]" },
+  MODULE_COSTOS: { Icon: MdAttachMoney, className: "bg-[#FEF3C7] text-[#B45309]" },
+  MODULE_CALCULADORA_PRECIO: { Icon: MdCalculate, className: "bg-[#DBEAFE] text-[#1D4ED8]" },
+  MODULE_COTIZACIONES: { Icon: MdDescription, className: "bg-[#D9F2F3] text-[#0B2E6B]" },
+  MODULE_PRODUCCION: { Icon: MdPrecisionManufacturing, className: "bg-[#DBEAFE] text-[#1D4ED8]" },
+  MODULE_ODOO: { Icon: MdSync, className: "bg-[#FEE2E2] text-[#DC2626]" },
+  MODULE_USUARIOS: { Icon: MdPeople, className: "bg-[#F1F5F9] text-[#64748B]" },
+  MODULE_BANNERS: { Icon: MdViewCarousel, className: "bg-[#EDE9FE] text-[#6D28D9]" },
+  MODULE_COMBOS: { Icon: MdGridView, className: "bg-[#FEE2E2] text-[#DC2626]" },
+  MODULE_MIS_COMBOS: { Icon: MdLocalOffer, className: "bg-[#FDE68A] text-[#B45309]" },
+  MODULE_RRHH: { Icon: MdBadge, className: "bg-[#DCFCE7] text-[#15803D]" },
+  MODULE_OUTLET: { Icon: MdSell, className: "bg-[#FFEDD5] text-[#C2410C]" },
+  MODULE_BODEGAS: { Icon: MdWarehouse, className: "bg-[#E0F2FE] text-[#0369A1]" },
+  MODULE_WHATSAPP: { Icon: MdChat, className: "bg-[#DCFCE7] text-[#15803D]" },
+  MODULE_MATERIAL: { Icon: MdFolder, className: "bg-[#FEF3C7] text-[#B45309]" },
+  MODULE_LOGISTICA: { Icon: MdLocalShipping, className: "bg-[#E0F2FE] text-[#0369A1]" },
+  MODULE_ENSAMBLE: { Icon: MdPrecisionManufacturing, className: "bg-[#EDE9FE] text-[#6D28D9]" },
+  MODULE_MANTENIMIENTO: { Icon: MdBuild, className: "bg-[#FFEDD5] text-[#C2410C]" },
+  MODULE_TICKETS: { Icon: MdConfirmationNumber, className: "bg-[#D9F2F3] text-[#0B2E6B]" },
+  MODULE_TAREAS: { Icon: MdChecklist, className: "bg-[#FDEEEF] text-[#051C46]" },
+  MODULE_DISENO: { Icon: MdPalette, className: "bg-[#FCE7F3] text-[#BE185D]" },
+  MODULE_DISENO_APROBAR: { Icon: MdVerified, className: "bg-[#DCFCE7] text-[#15803D]" },
+  MODULE_PLANTA: { Icon: MdPrecisionManufacturing, className: "bg-[#DBEAFE] text-[#1D4ED8]" },
+  MODULE_FINANZAS: { Icon: MdAttachMoney, className: "bg-[#FEF3C7] text-[#B45309]" },
+};
+
+function ModuleIcon({ module }: { module: string }) {
+  const icon = MODULE_ICON[module] ?? { Icon: MdDashboard, className: "bg-[#F1F5F9] text-[#64748B]" };
+  const { Icon } = icon;
+  return (
+    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${icon.className}`}>
+      <Icon size={16} />
+    </span>
+  );
+}
+
+function IconCheck() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path d="M4 12l5 5L20 6" />
+    </svg>
+  );
+}
+function IconDash() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+function IconX() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+function IconEye() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M1.5 12S5 5 12 5s10.5 7 10.5 7-3.5 7-10.5 7S1.5 12 1.5 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+function IconPlus() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+const AVATAR_COLORS = [
+  "bg-[#D9F2F3] text-[#0B2E6B]",
+  "bg-[#DBEAFE] text-[#1D4ED8]",
+  "bg-[#FFEDD5] text-[#C2410C]",
+  "bg-[#EDE9FE] text-[#6D28D9]",
+  "bg-[#FCE7F3] text-[#BE185D]",
+  "bg-[#DCFCE7] text-[#15803D]",
+];
+
+function initials(fullName: string) {
+  const parts = fullName.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase();
+}
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function IconPencil() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  );
+}
+function IconMail() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M3 7l9 6 9-6" />
+    </svg>
+  );
+}
+function IconKey() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="8" cy="15" r="4" />
+      <path d="M10.5 12.5L20 3M17 6l3 3M14 9l2.5 2.5" />
+    </svg>
+  );
+}
+function IconTrash() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2m2 0l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6" />
+    </svg>
+  );
+}
+function IconSearch() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.3-4.3" />
+    </svg>
+  );
+}
+function IconDownload() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3v12" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M4 21h16" />
+    </svg>
+  );
+}
+function IconUsers() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" />
+      <circle cx="17" cy="8" r="2.6" />
+      <path d="M15.5 14.3c2.9.5 5 2.6 5 5.7" />
+    </svg>
+  );
+}
+function IconUserCheck() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="10" cy="8" r="3.5" />
+      <path d="M3 20c0-4 3.1-6.5 7-6.5s7 2.5 7 6.5" />
+      <path d="M17 9l1.8 1.8L22 7.5" />
+    </svg>
+  );
+}
+function IconUserX() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="10" cy="8" r="3.5" />
+      <path d="M3 20c0-4 3.1-6.5 7-6.5s7 2.5 7 6.5" />
+      <path d="M16 7l5 5M21 7l-5 5" />
+    </svg>
+  );
+}
+function IconShield() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6l7-3z" />
+    </svg>
+  );
+}
+
+function StatCard({ icon, iconClass, label, value, hint }: { icon: React.ReactNode; iconClass: string; label: string; value: number | string; hint: string }) {
+  return (
+    <div className="flex flex-1 items-center gap-3 rounded-xl border border-[#E2E8F0] bg-white p-4">
+      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${iconClass}`}>{icon}</div>
+      <div>
+        <p className="text-xs font-semibold text-[#64748B]">{label}</p>
+        <p className="text-xl font-black text-[#1A1A1A]">{value}</p>
+        <p className="text-[11px] text-[#94A3B8]">{hint}</p>
+      </div>
+    </div>
+  );
+}
+
+export default function UsuariosPage() {
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState({ fullName: "", email: "", password: "", role: "SELLER" as Role });
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [editAvatarUrl, setEditAvatarUrl] = useState("");
+  const [editAvatarUploading, setEditAvatarUploading] = useState(false);
+  const editAvatarInputRef = useRef<HTMLInputElement>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [permUserId, setPermUserId] = useState<string | null>(null);
+  const [perms, setPerms] = useState<ModulePermission[]>([]);
+  const [permSearch, setPermSearch] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteImpact, setDeleteImpact] = useState<DeletionImpact | null>(null);
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<Role | "ALL">("ALL");
+  const [statusFilter, setStatusFilter] = useState<Status | "ALL">("ALL");
+  const [emailTarget, setEmailTarget] = useState<UserRow | null>(null);
+  const [backupValue, setBackupValue] = useState("");
+  const [emailValue, setEmailValue] = useState("");
+  const [fullNameValue, setFullNameValue] = useState("");
+  const [whatsappValue, setWhatsappValue] = useState("");
+  const [passwordTarget, setPasswordTarget] = useState<UserRow | null>(null);
+  const [confirmPasswordValue, setConfirmPasswordValue] = useState("");
+  const [emailConfirmPassword, setEmailConfirmPassword] = useState("");
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordValue, setPasswordValue] = useState("");
+  const [showNewPassword, setShowNewPassword] = useState(false);
+
+  const loadUsers = async () => {
+    setLoading(true);
+    const res = await fetch("/api/panel/users");
+    if (res.ok) {
+      const data = await res.json();
+      setUsers(data.users);
+      setCurrentUserId(data.currentUserId ?? null);
+    } else {
+      setError(
+        res.status === 401 || res.status === 403
+          ? "No autorizado para ver usuarios"
+          : `Error al cargar usuarios (${res.status}). Reintenta.`,
+      );
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadUsers(); }, []);
+  useRealtimeRefresh(["users", "permissions"], loadUsers);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 3000);
+  };
+
+  const uploadAvatar = async (file: File, apply: (url: string) => void, setBusy: (v: boolean) => void) => {
+    setError("");
+    setBusy(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/panel/users/avatar", { method: "POST", body: fd });
+    if (res.ok) {
+      const data = await res.json();
+      apply(data.avatarUrl);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Error al subir la imagen");
+    }
+    setBusy(false);
+  };
+
+  const generatePassword = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    const values = new Uint32Array(12);
+    crypto.getRandomValues(values);
+    const pwd = Array.from(values, (n) => chars[n % chars.length]).join("");
+    setForm((f) => ({ ...f, password: pwd }));
+    setShowPassword(true);
+  };
+
+  const createUser = async () => {
+    setError("");
+    const res = await fetch("/api/panel/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...form, avatarUrl: avatarUrl || null }),
+    });
+    if (res.ok) {
+      const newUser = await res.json();
+      setForm({ fullName: "", email: "", password: "", role: "SELLER" });
+      setAvatarUrl("");
+      setCreating(false);
+      loadUsers();
+      setPermUserId(newUser.id);
+      const defaults: Partial<Record<string, Omit<ModulePermission, "module" | "isOverride">>> =
+        form.role === "SUPERADMIN" ? {} : DEFAULT_PERMISSIONS[form.role as Exclude<Role, "SUPERADMIN">];
+      setPerms(Object.keys(MODULE_LABELS).map((module) => ({
+        module,
+        isOverride: true,
+        canView: defaults[module]?.canView ?? false,
+        canCreate: defaults[module]?.canCreate ?? false,
+        canEdit: defaults[module]?.canEdit ?? false,
+        canDelete: defaults[module]?.canDelete ?? false,
+      })));
+      showToast("Usuario creado correctamente");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Error al crear usuario");
+    }
+  };
+
+  const updateUser = async (id: string, patch: Partial<Pick<UserRow, "role" | "status" | "email" | "fullName" | "whatsappPhone" | "backupUserId" | "avatarUrl">> & { newPassword?: string }, successMsg?: string) => {
+    const res = await fetch(`/api/panel/users/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      loadUsers();
+      showToast(successMsg ?? "Usuario actualizado correctamente");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Error al actualizar usuario");
+    }
+  };
+
+  const editEmail = (u: UserRow) => {
+    setEmailTarget(u);
+    setEmailValue(u.email);
+    setFullNameValue(u.fullName);
+    setWhatsappValue(u.whatsappPhone ?? "");
+    setBackupValue(u.backupUserId ?? "");
+    setEditAvatarUrl(u.avatarUrl ?? "");
+    setEmailConfirmPassword("");
+    setEmailError(null);
+  };
+
+  const emailIsChanging = Boolean(
+    emailTarget && emailValue.trim() && emailValue.trim().toLowerCase() !== emailTarget.email.toLowerCase(),
+  );
+
+  const confirmEditEmail = async () => {
+    if (!emailTarget || emailSaving) return;
+    const email = emailValue.trim();
+    const fullName = fullNameValue.trim();
+    const whatsappPhone = whatsappValue.trim();
+    const patch: Partial<Pick<UserRow, "email" | "fullName" | "whatsappPhone" | "backupUserId" | "avatarUrl">> = {};
+    if (email && email !== emailTarget.email) patch.email = email;
+    if (fullName && fullName !== emailTarget.fullName) patch.fullName = fullName;
+    if (whatsappPhone !== (emailTarget.whatsappPhone ?? "")) patch.whatsappPhone = whatsappPhone || null;
+    if (backupValue !== (emailTarget.backupUserId ?? "")) patch.backupUserId = backupValue || null;
+    if (editAvatarUrl !== (emailTarget.avatarUrl ?? "")) patch.avatarUrl = editAvatarUrl || null;
+    if (Object.keys(patch).length === 0) {
+      setEmailTarget(null);
+      return;
+    }
+    // Cambiar el correo de otra persona exige tu contraseña (con otro correo, "olvidé mi contraseña" entrega la cuenta).
+    if (emailIsChanging && !emailConfirmPassword) {
+      setEmailError("Escribe tu contraseña para confirmar el cambio de correo.");
+      return;
+    }
+    setEmailSaving(true);
+    setEmailError(null);
+    const res = await fetch(`/api/panel/users/${emailTarget.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(emailIsChanging ? { ...patch, confirmPassword: emailConfirmPassword } : patch),
+    });
+    setEmailSaving(false);
+    if (res.ok) {
+      setEmailTarget(null);
+      setEmailConfirmPassword("");
+      loadUsers();
+      showToast("Usuario actualizado correctamente");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setEmailError(data.error ?? "No fue posible actualizar el usuario.");
+    }
+  };
+
+  const editPassword = (u: UserRow) => {
+    setPasswordTarget(u);
+    setPasswordValue("");
+    setConfirmPasswordValue("");
+    setPasswordError(null);
+    setShowNewPassword(false);
+  };
+
+  const confirmEditPassword = async () => {
+    if (!passwordTarget || passwordSaving) return;
+    const value = passwordValue.trim();
+    if (!value || !confirmPasswordValue) return;
+    setPasswordSaving(true);
+    setPasswordError(null);
+    const res = await fetch(`/api/panel/users/${passwordTarget.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ newPassword: value, confirmPassword: confirmPasswordValue }),
+    });
+    setPasswordSaving(false);
+    if (res.ok) {
+      setPasswordTarget(null);
+      setConfirmPasswordValue("");
+      loadUsers();
+      showToast("Contraseña actualizada correctamente");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setPasswordError(data.error ?? "No fue posible cambiar la contraseña.");
+    }
+  };
+
+  const confirmDeleteUser = async (force = false) => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    const res = await fetch(`/api/panel/users/${deleteTarget.id}${force ? "?force=true" : ""}`, { method: "DELETE" });
+    if (res.ok) {
+      setDeleteTarget(null);
+      setDeleteImpact(null);
+      loadUsers();
+      showToast("Usuario eliminado correctamente");
+    } else if (res.status === 409) {
+      const data = await res.json().catch(() => ({}));
+      if (data.requiresConfirmation && data.impact) {
+        setDeleteImpact(data.impact);
+      } else {
+        setError(data.error ?? "Error al eliminar usuario");
+        setDeleteTarget(null);
+        setDeleteImpact(null);
+      }
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Error al eliminar usuario");
+      setDeleteTarget(null);
+      setDeleteImpact(null);
+    }
+    setDeleting(false);
+  };
+
+  const openPermissions = async (id: string) => {
+    setPermUserId(id);
+    const res = await fetch(`/api/panel/users/${id}/permissions`);
+    if (res.ok) {
+      const data = await res.json();
+      setPerms(data.permissions);
+    }
+  };
+
+  const togglePerm = (module: string, field: keyof Omit<ModulePermission, "module" | "isOverride">) => {
+    setPerms((prev) => prev.map((p) => (p.module === module ? { ...p, [field]: !p[field] } : p)));
+  };
+
+  const applyQuickAction = (kind: "ALL" | "NONE" | "VIEW_ONLY" | "FULL") => {
+    setPerms((prev) => prev.map((p) => {
+      if (kind === "NONE") return { ...p, canView: false, canCreate: false, canEdit: false, canDelete: false };
+      if (kind === "FULL") return { ...p, canView: true, canCreate: true, canEdit: true, canDelete: true };
+      if (kind === "VIEW_ONLY") return { ...p, canView: true, canCreate: false, canEdit: false, canDelete: false };
+      return { ...p, canView: true };
+    }));
+  };
+
+  const savePermissions = async () => {
+    if (!permUserId) return;
+    const res = await fetch(`/api/panel/users/${permUserId}/permissions`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        permissions: perms.map(({ module, canView, canCreate, canEdit, canDelete }) => ({
+          module, canView, canCreate, canEdit, canDelete,
+        })),
+      }),
+    });
+    if (res.ok) {
+      setPermUserId(null);
+      showToast("Permisos actualizados correctamente");
+    }
+  };
+
+  const exportCsv = () => {
+    const header = ["Nombre", "Correo", "Rol", "Estado", "Creado"];
+    const rows = filteredUsers.map((u) => [u.fullName, u.email, ROLE_LABELS[u.role], STATUS_LABELS[u.status], formatDate(u.createdAt)]);
+    const csv = [header, ...rows].map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "usuarios-presservac.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const filteredUsers = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return users.filter((u) => {
+      if (term && !`${u.fullName} ${u.email}`.toLowerCase().includes(term)) return false;
+      if (roleFilter !== "ALL" && u.role !== roleFilter) return false;
+      if (statusFilter !== "ALL" && u.status !== statusFilter) return false;
+      return true;
+    });
+  }, [users, search, roleFilter, statusFilter]);
+
+  const stats = useMemo(() => {
+    const total = users.length;
+    const active = users.filter((u) => u.status === "ACTIVE").length;
+    const inactive = total - active;
+    const roles = new Set(users.map((u) => u.role)).size;
+    return { total, active, inactive, roles };
+  }, [users]);
+
+  const filteredPerms = useMemo(() => {
+    const term = permSearch.trim().toLowerCase();
+    if (!term) return perms;
+    return perms.filter((p) => (MODULE_LABELS[p.module] ?? p.module).toLowerCase().includes(term));
+  }, [perms, permSearch]);
+
+  const permsSummary = useMemo(() => {
+    let allowed = 0;
+    let denied = 0;
+    for (const p of perms) {
+      for (const field of ["canView", "canCreate", "canEdit", "canDelete"] as const) {
+        if (p[field]) allowed++; else denied++;
+      }
+    }
+    return { allowed, denied };
+  }, [perms]);
+
+  if (loading) return <SkeletonPanelPage />;
+
+  return (
+    <div className="space-y-6 p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#D9F2F3] text-[#0B2E6B]">
+            <IconUsers />
+          </div>
+          <div>
+            <h1 className="text-xl font-black text-[#1A1A1A]">Usuarios</h1>
+            <p className="text-sm text-[#64748B]">Gestiona las cuentas de usuarios y sus accesos al sistema.</p>
+          </div>
+        </div>
+        <button
+          onClick={() => { setAvatarUrl(""); setError(""); setCreating(true); }}
+          className="shrink-0 rounded-xl bg-[#D60517] px-4 py-2 text-sm font-bold text-white"
+        >
+          + Nuevo usuario
+        </button>
+      </div>
+
+      {error && <p className="text-sm text-red-500">{error}</p>}
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-xl bg-[#16A34A] px-4 py-3 text-sm font-bold text-white shadow-lg">
+          <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M20 6L9 17l-5-5" />
+          </svg>
+          {toast}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-3 md:flex-row">
+        <StatCard icon={<IconUsers />} iconClass="bg-[#D9F2F3] text-[#0B2E6B]" label="Total usuarios" value={stats.total} hint="Cuentas registradas" />
+        <StatCard icon={<IconUserCheck />} iconClass="bg-[#DBEAFE] text-[#1D4ED8]" label="Usuarios activos" value={stats.active} hint={`${stats.total ? Math.round((stats.active / stats.total) * 100) : 0}% del total`} />
+        <StatCard icon={<IconUserX />} iconClass="bg-[#FFEDD5] text-[#C2410C]" label="Inactivos" value={stats.inactive} hint={`${stats.total ? Math.round((stats.inactive / stats.total) * 100) : 0}% del total`} />
+        <StatCard icon={<IconShield />} iconClass="bg-[#EDE9FE] text-[#6D28D9]" label="Roles asignados" value={stats.roles} hint="Configurados" />
+      </div>
+
+      {creating && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+          <div className="flex min-h-full items-center justify-center">
+            <div className="flex max-h-[85dvh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white">
+              <div className="flex items-start justify-between gap-4 p-6 pb-4">
+                <div>
+                  <h3 className="text-lg font-black text-[#1A1A1A]">Nuevo usuario</h3>
+                  <p className="mt-0.5 text-sm text-[#64748B]">Completa la información para crear un nuevo acceso.</p>
+                </div>
+                <button onClick={() => setCreating(false)} aria-label="Cerrar"
+                  className="shrink-0 text-[#94A3B8] hover:text-[#1A1A1A]">
+                  <IconX />
+                </button>
+              </div>
+              <div className="flex flex-col gap-4 overflow-y-auto px-6 pb-6">
+                <div>
+                  <label className="mb-1.5 block text-sm font-bold text-[#1A1A1A]">Foto de perfil</label>
+                  <div className="flex items-center gap-4">
+                    <div className="relative shrink-0">
+                      <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-[#E2E8F0] text-[#94A3B8]">
+                        {avatarUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={avatarUrl} alt="Foto de perfil" className="h-full w-full object-cover" />
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-10 w-10" fill="currentColor">
+                            <circle cx="12" cy="8" r="4" />
+                            <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7v1H4v-1z" />
+                          </svg>
+                        )}
+                      </div>
+                      <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading}
+                        aria-label="Subir foto"
+                        className="absolute bottom-0 right-0 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#D60517] text-white disabled:opacity-50">
+                        {avatarUploading ? (
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M21 12a9 9 0 11-6.2-8.6" />
+                          </svg>
+                        ) : (
+                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M12 5v14M5 12h14" />
+                          </svg>
+                        )}
+                      </button>
+                      <input ref={avatarInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) uploadAvatar(file, setAvatarUrl, setAvatarUploading);
+                          e.target.value = "";
+                        }} />
+                    </div>
+                    <div>
+                      <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={avatarUploading}
+                        className="flex items-center gap-2 rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm font-bold text-[#0B2E6B] hover:bg-[#F8FAFC] disabled:opacity-50">
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M3 8a2 2 0 012-2h1.5l1-1.5h5l1 1.5H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+                          <circle cx="12" cy="12.5" r="3.2" />
+                        </svg>
+                        {avatarUploading ? "Subiendo…" : "Subir foto"}
+                      </button>
+                      <p className="mt-1.5 text-xs text-[#94A3B8]">JPG o PNG. Máx. 5 MB.</p>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-bold text-[#1A1A1A]">Nombre completo</label>
+                  <input placeholder="Ej. María González" value={form.fullName}
+                    onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                    className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-sm text-[#1A1A1A] placeholder:text-[#94A3B8] focus:border-[#D60517] focus:outline-none" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-bold text-[#1A1A1A]">Correo electrónico</label>
+                  <input placeholder="Ej. maria@empresa.com" value={form.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 text-sm text-[#1A1A1A] placeholder:text-[#94A3B8] focus:border-[#D60517] focus:outline-none" />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-bold text-[#1A1A1A]">Contraseña temporal</label>
+                  <div className="relative">
+                    <input placeholder="Ingresa una contraseña" type={showPassword ? "text" : "password"} value={form.password}
+                      onChange={(e) => setForm({ ...form, password: e.target.value })}
+                      className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2.5 pr-10 text-sm text-[#1A1A1A] placeholder:text-[#94A3B8] focus:border-[#D60517] focus:outline-none" />
+                    <button type="button" onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#94A3B8] hover:text-[#D60517]">
+                      {showPassword ? (
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      ) : (
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                          <path d="M3 3l18 18" />
+                          <path d="M10.6 5.2A10.6 10.6 0 0112 5c6 0 10 7 10 7a17.7 17.7 0 01-3.2 4M6.5 6.6C3.9 8.3 2 12 2 12s4 7 10 7a9.9 9.9 0 004.4-1" />
+                          <path d="M9.9 9.9a3 3 0 004.2 4.2" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between gap-2">
+                    <span className={`text-xs ${form.password && form.password.length < 8 ? "text-[#DC2626]" : "text-[#94A3B8]"}`}>Mínimo 8 caracteres</span>
+                    <button type="button" onClick={generatePassword}
+                      className="flex items-center gap-1 text-xs font-bold text-[#0B2E6B] hover:text-[#D60517]">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
+                        <path d="M12 2l1.6 4.9L18.5 8.5l-4.9 1.6L12 15l-1.6-4.9L5.5 8.5l4.9-1.6L12 2z" />
+                        <path d="M19 14l.8 2.4 2.4.8-2.4.8L19 20l-.8-2.4-2.4-.8 2.4-.8L19 14z" />
+                      </svg>
+                      Generar contraseña
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-bold text-[#1A1A1A]">Rol</label>
+                  <SimpleSelect
+                    value={form.role}
+                    options={ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
+                    onChange={(v) => setForm({ ...form, role: v as Role })}
+                  />
+                  <p className="mt-1.5 text-xs text-[#94A3B8]">{ROLE_DESCRIPTIONS[form.role]}</p>
+                </div>
+              </div>
+              <div className="flex gap-3 border-t border-[#E2E8F0] p-6 pt-4">
+                <button onClick={() => setCreating(false)} className="flex-1 rounded-lg border border-[#E2E8F0] py-3 text-sm font-bold text-[#64748B] hover:bg-[#F8FAFC]">Cancelar</button>
+                <button onClick={createUser} className="flex-1 rounded-lg bg-[#D60517] py-3 text-sm font-bold text-white hover:bg-[#0B2E6B]">
+                  Crear usuario
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-[#E2E8F0] bg-white">
+        <div className="flex flex-col gap-3 border-b border-[#E2E8F0] p-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-1 flex-col gap-3 md:flex-row md:items-center">
+            <div className="relative flex-1 md:max-w-xs">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#94A3B8]"><IconSearch /></span>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por nombre o correo..."
+                className="w-full rounded-lg border border-[#E2E8F0] py-2 pl-9 pr-3 text-sm"
+              />
+            </div>
+            <SimpleSelect
+              value={roleFilter}
+              options={[{ value: "ALL", label: "Rol: Todos" }, ...ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))]}
+              onChange={(v) => setRoleFilter(v as Role | "ALL")}
+              className="text-[#64748B]"
+            />
+            <SimpleSelect
+              value={statusFilter}
+              options={[{ value: "ALL", label: "Estado: Todos" }, ...STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))]}
+              onChange={(v) => setStatusFilter(v as Status | "ALL")}
+              className="text-[#64748B]"
+            />
+          </div>
+          <button onClick={exportCsv}
+            className="flex shrink-0 items-center justify-center gap-2 rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm font-bold text-[#64748B] hover:text-[#D60517]">
+            <IconDownload /> Exportar
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[820px] text-sm">
+          <thead>
+            <tr className="border-b border-[#E2E8F0] text-left text-xs font-bold text-[#64748B]">
+              <th className="sticky left-0 z-10 border-r border-[#E2E8F0] bg-[#F8FAFC] p-3">Usuario</th>
+              <th className="p-3">Correo electrónico</th>
+              <th className="p-3">Rol</th>
+              <th className="p-3">Estado</th>
+              <th className="sticky right-0 border-l border-[#E2E8F0] bg-[#F8FAFC] p-3">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredUsers.map((u, idx) => (
+              <tr key={u.id} className="border-b border-[#F1F5F9]">
+                <td className="sticky left-0 z-10 border-r border-[#E2E8F0] bg-white p-3">
+                  <div className="flex items-center gap-3">
+                    {u.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={u.avatarUrl}
+                        alt={u.fullName}
+                        className="h-9 w-9 shrink-0 rounded-full object-cover"
+                      />
+                    ) : (
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${AVATAR_COLORS[idx % AVATAR_COLORS.length]}`}>
+                        {initials(u.fullName)}
+                      </div>
+                    )}
+                    <div>
+                      <p className="font-bold text-[#1A1A1A]">{u.fullName}</p>
+                      <p className="text-xs text-[#94A3B8]">Creado {formatDate(u.createdAt)}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="p-3 text-[#64748B]">{u.email}</td>
+                <td className="p-3">
+                  <SimpleSelect
+                    value={u.role}
+                    options={ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
+                    onChange={(v) => updateUser(u.id, { role: v as Role }, "Rol actualizado correctamente")}
+                    triggerClassName={`flex items-center gap-1 rounded-full border-0 px-3 py-1 text-xs font-bold ${ROLE_BADGE[u.role]}`}
+                    hideChevron
+                  />
+                </td>
+                <td className="p-3">
+                  <div className="flex items-center gap-2">
+                    <SimpleSelect
+                      value={u.status}
+                      options={STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))}
+                      onChange={(v) => updateUser(u.id, { status: v as Status }, "Estado actualizado correctamente")}
+                      triggerClassName={`flex items-center gap-1 rounded-full border-0 bg-transparent px-1 py-1 text-xs font-bold ${STATUS_TEXT[u.status]}`}
+                      hideChevron
+                    />
+                    <span className={`h-2 w-2 rounded-full ${STATUS_DOT[u.status]}`} />
+                  </div>
+                </td>
+                <td className="sticky right-0 border-l border-[#E2E8F0] bg-white p-3">
+                  <div className="flex items-center gap-0.5 text-[#64748B]">
+                    <button onClick={() => openPermissions(u.id)} aria-label="Editar permisos" title="Permisos" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-xs font-bold hover:bg-[#F1F5F9] hover:text-[#D60517] md:px-2">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6l7-3z" /></svg> <span className="hidden md:inline">Permisos</span>
+                    </button>
+                    <button onClick={() => editEmail(u)} aria-label="Editar datos del usuario" title="Datos" className="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-xs font-bold hover:bg-[#F1F5F9] hover:text-[#D60517] md:px-2">
+                      <IconPencil /> <span className="hidden md:inline">Datos</span>
+                    </button>
+                    <button disabled={u.id === currentUserId} onClick={() => editPassword(u)} aria-label="Cambiar contraseña" title={u.id === currentUserId ? "Tu contraseña se cambia desde Mi cuenta" : "Clave"} className="disabled:cursor-not-allowed disabled:text-[#CBD5E1] disabled:hover:bg-transparent flex items-center gap-1.5 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-xs font-bold hover:bg-[#F1F5F9] hover:text-[#D60517] md:px-2">
+                      <IconKey /> <span className="hidden md:inline">Clave</span>
+                    </button>
+                    <span className="mx-1 h-4 w-px shrink-0 bg-[#E2E8F0]" />
+                    <button disabled={u.id === currentUserId} onClick={() => { setDeleteTarget(u); setDeleteImpact(null); }} aria-label="Eliminar usuario" title={u.id === currentUserId ? "No puedes eliminar tu propio usuario" : "Eliminar"} className="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-1.5 py-1.5 text-xs font-bold text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-[#CBD5E1] disabled:hover:bg-transparent md:px-2">
+                      <IconTrash /> <span className="hidden md:inline">Eliminar</span>
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {filteredUsers.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-6 text-center text-sm text-[#94A3B8]">No se encontraron usuarios con esos filtros.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+        </div>
+      </div>
+
+      {permUserId && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+          <div className="flex min-h-full items-center justify-center">
+          <div className="flex max-h-[85dvh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white">
+            <div className="flex items-start justify-between gap-4 border-b border-[#E2E8F0] p-5">
+              <div className="flex items-start gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#D9F2F3] text-[#0B2E6B]">
+                  <IconShield />
+                </span>
+                <div>
+                  <h2 className="text-base font-black text-[#1A1A1A]">Permisos por módulo</h2>
+                  <p className="text-sm text-[#64748B]">Define qué acciones puede realizar este usuario en cada módulo del sistema.</p>
+                </div>
+              </div>
+              <button onClick={() => setPermUserId(null)} aria-label="Cerrar"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#64748B] hover:bg-[#F1F5F9]">
+                <IconX />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-3 border-b border-[#E2E8F0] p-4 md:flex-row md:items-center md:justify-between">
+              <div className="relative w-full md:max-w-xs">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#94A3B8]"><IconSearch /></span>
+                <input value={permSearch} onChange={(e) => setPermSearch(e.target.value)} placeholder="Buscar módulo..."
+                  className="w-full rounded-lg border border-[#E2E8F0] py-2 pl-9 pr-3 text-sm" />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs font-semibold text-[#64748B]">Acciones rápidas:</span>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => applyQuickAction("ALL")} className="rounded-lg border border-[#D60517] px-3 py-1.5 text-xs font-bold text-[#0B2E6B]">Ver todo</button>
+                  <button onClick={() => applyQuickAction("NONE")} className="rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-xs font-bold text-[#64748B] hover:border-[#D60517]">Nada</button>
+                  <button onClick={() => applyQuickAction("VIEW_ONLY")} className="rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-xs font-bold text-[#64748B] hover:border-[#D60517]">Solo ver</button>
+                  <button onClick={() => applyQuickAction("FULL")} className="rounded-lg border border-[#E2E8F0] px-3 py-1.5 text-xs font-bold text-[#64748B] hover:border-[#D60517]">Todas</button>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-[#64748B]">
+                  <span className="font-semibold">Leyenda:</span>
+                  <span className="flex items-center gap-1"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-[#DCFCE7] text-[#15803D]"><IconCheck /></span>Permitido</span>
+                  <span className="flex items-center gap-1"><span className="flex h-4 w-4 items-center justify-center rounded-full bg-[#F1F5F9] text-[#94A3B8]"><IconDash /></span>No permitido</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4">
+              <table className="w-full min-w-[480px] text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-bold uppercase text-[#94A3B8]">
+                    <th className="p-2">Módulo</th>
+                    <th className="p-2 text-center">
+                      <div className="flex items-center justify-center gap-1"><IconEye /> Ver</div>
+                      <p className="mt-0.5 text-[10px] font-normal normal-case text-[#94A3B8]">Solo lectura</p>
+                    </th>
+                    <th className="p-2 text-center">
+                      <div className="flex items-center justify-center gap-1"><IconPlus /> Crear</div>
+                      <p className="mt-0.5 text-[10px] font-normal normal-case text-[#94A3B8]">Agregar</p>
+                    </th>
+                    <th className="p-2 text-center">
+                      <div className="flex items-center justify-center gap-1"><IconPencil /> Editar</div>
+                      <p className="mt-0.5 text-[10px] font-normal normal-case text-[#94A3B8]">Modificar</p>
+                    </th>
+                    <th className="p-2 text-center">
+                      <div className="flex items-center justify-center gap-1"><IconTrash /> Eliminar</div>
+                      <p className="mt-0.5 text-[10px] font-normal normal-case text-[#94A3B8]">Borrar</p>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPerms.map((p) => (
+                    <tr key={p.module} className="border-t border-[#F1F5F9]">
+                      <td className="p-2">
+                        <div className="flex items-center gap-2 font-bold text-[#1A1A1A]">
+                          <ModuleIcon module={p.module} />
+                          {MODULE_LABELS[p.module] ?? p.module}
+                        </div>
+                      </td>
+                      {(["canView", "canCreate", "canEdit", "canDelete"] as const).map((field) => (
+                        <td key={field} className="p-2 text-center">
+                          <button
+                            onClick={() => togglePerm(p.module, field)}
+                            aria-pressed={p[field]}
+                            className={`inline-flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${
+                              p[field]
+                                ? "border-[#BBF7D0] bg-[#DCFCE7] text-[#15803D]"
+                                : "border-[#E2E8F0] bg-[#F8FAFC] text-[#94A3B8]"
+                            }`}
+                          >
+                            {p[field] ? <IconCheck /> : <IconDash />}
+                          </button>
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {filteredPerms.length === 0 && (
+                    <tr><td colSpan={5} className="p-6 text-center text-sm text-[#94A3B8]">Sin módulos que coincidan.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-[#E2E8F0] p-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-2 rounded-lg bg-[#F8FAFC] px-3 py-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#D9F2F3] text-[#0B2E6B]"><IconShield /></span>
+                <div className="text-xs">
+                  <p className="font-bold text-[#1A1A1A]">Resumen de permisos</p>
+                  <p className="text-[#64748B]">
+                    <span className="font-bold text-[#15803D]">{permsSummary.allowed} permitidos</span>
+                    {" · "}
+                    <span className="font-bold text-[#94A3B8]">{permsSummary.denied} no permitidos</span>
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setPermUserId(null)} className="rounded-lg border border-[#E2E8F0] px-4 py-2 text-sm font-bold text-[#64748B]">
+                  Cancelar
+                </button>
+                <button onClick={savePermissions} className="flex items-center gap-2 rounded-lg bg-[#D60517] px-4 py-2 text-sm font-bold text-white">
+                  <IconCheck /> Guardar cambios
+                </button>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && !deleteImpact && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+          <div className="flex min-h-full items-center justify-center">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5">
+            <h2 className="mb-2 text-sm font-black text-[#1A1A1A]">Eliminar usuario</h2>
+            <p className="text-sm text-[#64748B]">
+              ¿Eliminar a <span className="font-bold text-[#1A1A1A]">{deleteTarget.fullName}</span> ({deleteTarget.email})?
+              Esta acción no se puede deshacer.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="rounded-lg border border-[#E2E8F0] px-3 py-2 text-xs font-bold disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => confirmDeleteUser(false)}
+                disabled={deleting}
+                className="rounded-lg bg-red-500 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+              >
+                {deleting ? "Eliminando…" : "Eliminar"}
+              </button>
+            </div>
+          </div>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && deleteImpact && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+          <div className="flex min-h-full items-center justify-center">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5">
+            <h2 className="mb-2 text-sm font-black text-[#DC2626]">Este usuario tiene historial</h2>
+            <p className="mb-2 text-sm text-[#64748B]">
+              <span className="font-bold text-[#1A1A1A]">{deleteTarget.fullName}</span> ({deleteTarget.email}) tiene registros asociados que también se eliminarán o desvincularán:
+            </p>
+            <ul className="mb-3 space-y-1 text-xs text-[#64748B]">
+              {deleteImpact.orders > 0 && <li>• {deleteImpact.orders} pedido(s)</li>}
+              {deleteImpact.quotations > 0 && <li>• {deleteImpact.quotations} cotización(es)</li>}
+              {deleteImpact.campaigns > 0 && <li>• {deleteImpact.campaigns} campaña(s)</li>}
+              {deleteImpact.productionRuns > 0 && <li>• {deleteImpact.productionRuns} corrida(s) de producción</li>}
+              {deleteImpact.productionOrders > 0 && <li>• {deleteImpact.productionOrders} orden(es) de producción</li>}
+              {deleteImpact.priceHistory > 0 && <li>• {deleteImpact.priceHistory} cambio(s) de precio registrados</li>}
+              {deleteImpact.sellerConfig > 0 && <li>• configuración de costos/calculadora de vendedor</li>}
+              {deleteImpact.ordersUnassigned > 0 && <li>• {deleteImpact.ordersUnassigned} pedido(s) donde queda como vendedor asignado (se desvinculará)</li>}
+              {deleteImpact.productionOrdersUnapproved > 0 && <li>• {deleteImpact.productionOrdersUnapproved} orden(es) de producción que aprobó (se desvinculará)</li>}
+            </ul>
+            <p className="mb-3 text-xs font-bold text-[#DC2626]">Esta acción es irreversible.</p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setDeleteTarget(null); setDeleteImpact(null); }}
+                disabled={deleting}
+                className="rounded-lg border border-[#E2E8F0] px-3 py-2 text-xs font-bold disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => confirmDeleteUser(true)}
+                disabled={deleting}
+                className="rounded-lg bg-red-500 px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+              >
+                {deleting ? "Eliminando…" : "Sí, eliminar todo"}
+              </button>
+            </div>
+          </div>
+          </div>
+        </div>
+      )}
+
+      {emailTarget && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+          <div className="flex min-h-full items-center justify-center">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5">
+            <div className="mb-4 flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#D9F2F3] text-[#0B2E6B]">
+                <IconMail />
+              </span>
+              <div>
+                <h2 className="text-sm font-black text-[#1A1A1A]">Editar usuario</h2>
+                <p className="text-xs text-[#94A3B8]">{emailTarget.fullName}</p>
+              </div>
+            </div>
+            <div className="mb-4 flex items-center gap-3">
+              <div className="relative shrink-0">
+                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-[#E2E8F0] text-[#94A3B8]">
+                  {editAvatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={editAvatarUrl} alt="Foto de perfil" className="h-full w-full object-cover" />
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="h-8 w-8" fill="currentColor">
+                      <circle cx="12" cy="8" r="4" />
+                      <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7v1H4v-1z" />
+                    </svg>
+                  )}
+                </div>
+                <button type="button" onClick={() => editAvatarInputRef.current?.click()} disabled={editAvatarUploading}
+                  aria-label="Subir foto"
+                  className="absolute bottom-0 right-0 flex h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-[#D60517] text-white disabled:opacity-50">
+                  {editAvatarUploading ? (
+                    <svg viewBox="0 0 24 24" className="h-3 w-3 animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M21 12a9 9 0 11-6.2-8.6" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                  )}
+                </button>
+                <input ref={editAvatarInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) uploadAvatar(file, setEditAvatarUrl, setEditAvatarUploading);
+                    e.target.value = "";
+                  }} />
+              </div>
+              <div className="text-xs">
+                <p className="font-bold text-[#1A1A1A]">Foto de perfil</p>
+                {editAvatarUrl ? (
+                  <button type="button" onClick={() => setEditAvatarUrl("")} className="font-bold text-red-500 hover:underline">
+                    Quitar foto
+                  </button>
+                ) : (
+                  <p className="text-[#94A3B8]">JPG o PNG. Máx. 5 MB.</p>
+                )}
+              </div>
+            </div>
+            <label className="mb-1 block text-xs font-semibold text-[#64748B]">Nombre completo</label>
+            <input
+              autoFocus
+              type="text"
+              value={fullNameValue}
+              onChange={(e) => setFullNameValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && confirmEditEmail()}
+              className="mb-3 w-full rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm focus:border-[#D60517] focus:outline-none"
+            />
+            <label className="mb-1 block text-xs font-semibold text-[#64748B]">Correo</label>
+            <input
+              type="email"
+              value={emailValue}
+              onChange={(e) => setEmailValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && confirmEditEmail()}
+              className="mb-3 w-full rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm focus:border-[#D60517] focus:outline-none"
+            />
+            <label className="mb-1 block text-xs font-semibold text-[#64748B]">WhatsApp (para asignación de combos)</label>
+            <input
+              type="tel"
+              value={whatsappValue}
+              onChange={(e) => setWhatsappValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && confirmEditEmail()}
+              placeholder="Ej. 573001234567"
+              className="mb-3 w-full rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm focus:border-[#D60517] focus:outline-none"
+            />
+            <label className="mb-1 block text-xs font-semibold text-[#64748B]">Respaldo (quién lo cubre si falta)</label>
+            <SimpleSelect
+              value={backupValue}
+              options={[
+                { value: "", label: "Sin respaldo" },
+                ...users
+                  .filter((u) => u.id !== emailTarget.id)
+                  .map((u) => ({ value: u.id, label: `${u.fullName} — ${ROLE_LABELS[u.role] ?? u.role}` })),
+              ]}
+              onChange={setBackupValue}
+              portal
+            />
+            {emailIsChanging && (
+              <>
+                <label className="mb-1 mt-3 block text-xs font-semibold text-[#64748B]">Tu contraseña (para confirmar el cambio de correo)</label>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={emailConfirmPassword}
+                  onChange={(e) => setEmailConfirmPassword(e.target.value)}
+                  className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm focus:border-[#D60517] focus:outline-none"
+                />
+              </>
+            )}
+            {emailError && <p className="mt-2 text-xs font-semibold text-red-600">{emailError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setEmailTarget(null)} className="rounded-lg border border-[#E2E8F0] px-3 py-2 text-xs font-bold text-[#64748B]">
+                Cancelar
+              </button>
+              <button onClick={confirmEditEmail} disabled={emailSaving} className="rounded-lg bg-[#D60517] px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+                {emailSaving ? "Guardando…" : "Guardar"}
+              </button>
+            </div>
+          </div>
+          </div>
+        </div>
+      )}
+
+      {passwordTarget && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+          <div className="flex min-h-full items-center justify-center">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5">
+            <div className="mb-4 flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#D9F2F3] text-[#0B2E6B]">
+                <IconKey />
+              </span>
+              <div>
+                <h2 className="text-sm font-black text-[#1A1A1A]">Cambiar contraseña</h2>
+                <p className="text-xs text-[#94A3B8]">{passwordTarget.email}</p>
+              </div>
+            </div>
+            <p className="mb-3 rounded-lg bg-[#FFF7ED] px-3 py-2 text-xs text-[#9A3412]">
+              Vas a cambiar la contraseña de <strong>{passwordTarget.fullName}</strong>. Se le avisará por correo.
+            </p>
+            <label className="mb-1 block text-xs font-semibold text-[#64748B]">Nueva contraseña</label>
+            <div className="relative">
+              <input
+                autoFocus
+                type={showNewPassword ? "text" : "password"}
+                value={passwordValue}
+                onChange={(e) => setPasswordValue(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && confirmEditPassword()}
+                className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2 pr-9 text-sm focus:border-[#D60517] focus:outline-none"
+              />
+              <button type="button" onClick={() => setShowNewPassword((v) => !v)}
+                aria-label={showNewPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[#94A3B8] hover:text-[#D60517]">
+                {showNewPassword ? (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M3 3l18 18" />
+                    <path d="M10.6 5.2A10.6 10.6 0 0112 5c6 0 10 7 10 7a17.7 17.7 0 01-3.2 4M6.5 6.6C3.9 8.3 2 12 2 12s4 7 10 7a9.9 9.9 0 004.4-1" />
+                    <path d="M9.9 9.9a3 3 0 004.2 4.2" />
+                  </svg>
+                )}
+              </button>
+            </div>
+            <label className="mb-1 mt-3 block text-xs font-semibold text-[#64748B]">Tu contraseña (para confirmar que eres tú)</label>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={confirmPasswordValue}
+              onChange={(e) => setConfirmPasswordValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && confirmEditPassword()}
+              className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm focus:border-[#D60517] focus:outline-none"
+            />
+            {passwordError && <p className="mt-2 text-xs font-semibold text-red-600">{passwordError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setPasswordTarget(null)} className="rounded-lg border border-[#E2E8F0] px-3 py-2 text-xs font-bold text-[#64748B]">
+                Cancelar
+              </button>
+              <button onClick={confirmEditPassword} disabled={!passwordValue.trim() || !confirmPasswordValue || passwordSaving} className="rounded-lg bg-[#D60517] px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+                {passwordSaving ? "Guardando…" : "Cambiar contraseña"}
+              </button>
+            </div>
+          </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

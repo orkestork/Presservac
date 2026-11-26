@@ -1,0 +1,40 @@
+import { requirePermission } from "@/lib/permissions";
+import { createProductionOrderItem } from "@/lib/panel";
+import { parsePositiveInteger } from "@/lib/operations-validation";
+import { broadcastPanelUpdate } from "@/lib/realtime";
+
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const access = await requirePermission("MODULE_PRODUCCION", "create");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  const { id } = await params;
+  const body = await request.json() as {
+    productId?: string; quantity?: number; destination?: string | null; notes?: string | null;
+  };
+
+  if (!body.productId) {
+    return Response.json({ error: "Producto requerido" }, { status: 400 });
+  }
+
+  try {
+    const created = await createProductionOrderItem(id, {
+      productId: body.productId,
+      quantity: body.quantity === undefined ? 1 : parsePositiveInteger(body.quantity),
+      destination: body.destination,
+      notes: body.notes,
+    });
+    broadcastPanelUpdate("production").catch(() => {});
+    return Response.json(created);
+  } catch (e) {
+    if (e instanceof Error && e.message === "NOT_FOUND") {
+      return Response.json({ error: "Orden no encontrada" }, { status: 404 });
+    }
+    if (e instanceof Error && e.message === "NOT_EDITABLE") {
+      return Response.json({ error: "Solo se puede editar en borrador" }, { status: 409 });
+    }
+    if (e instanceof Error && e.message === "PRODUCT_NOT_FOUND") {
+      return Response.json({ error: "Producto no encontrado" }, { status: 404 });
+    }
+    if (e instanceof Error && e.message === "INVALID_NUMBER") return Response.json({ error: "Cantidad inválida" }, { status: 400 });
+    return Response.json({ error: "Error interno" }, { status: 500 });
+  }
+}

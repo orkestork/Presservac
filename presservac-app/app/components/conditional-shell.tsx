@@ -1,0 +1,29 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+import SiteHeader from "./site-header";
+import SupportChat from "./support-chat";
+import type { UserRole } from "@/generated/prisma/client";
+
+type Props = {
+  currentUser: { fullName: string; role: UserRole; avatarUrl?: string | null } | null;
+  children: React.ReactNode;
+};
+
+export default function ConditionalShell({ currentUser, children }: Props) {
+  const pathname = usePathname();
+  const isPanelRoute = pathname.startsWith("/panel") || pathname.startsWith("/imprimir") || pathname.startsWith("/empleado") || pathname.startsWith("/conductor") || pathname.startsWith("/entrega") || pathname.startsWith("/seguimiento");
+  // En las pantallas de autenticación el chat no aporta y su montaje dispara una
+  // consulta de vendedores contra la BD que retrasa la llegada a /login.
+  const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/registro");
+
+  return (
+    <>
+      {!isPanelRoute && !isAuthRoute && <SiteHeader currentUser={currentUser} />}
+      <div className={!isPanelRoute && !isAuthRoute ? "pt-[62px] pb-16 lg:pt-[66px] lg:pb-0" : undefined}>
+        {children}
+      </div>
+      {!isPanelRoute && !isAuthRoute && <SupportChat />}
+    </>
+  );
+}

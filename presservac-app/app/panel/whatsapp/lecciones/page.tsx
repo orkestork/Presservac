@@ -1,0 +1,379 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import { MdAdd, MdArrowBack, MdAutorenew, MdCheck, MdClose, MdEdit, MdPsychology, MdSave } from "react-icons/md";
+import { SimpleSelect } from "../../_components/simple-select";
+import { Modal } from "../../_components/ops-ui";
+
+type Category = "VOCABULARIO" | "ERROR" | "ESTILO" | "PROCESO" | "VENTA" | "REVISAR";
+type Status = "PENDING" | "APPROVED" | "REJECTED";
+
+type Lesson = {
+  id: string;
+  text: string;
+  category: Category;
+  status: Status;
+  evidence: string;
+  createdAt: string;
+  proposedByName: string | null;
+};
+
+type Counts = Record<Status, number>;
+
+const TABS: Array<{ value: Status; label: string }> = [
+  { value: "PENDING", label: "Pendientes" },
+  { value: "APPROVED", label: "Aprobadas" },
+  { value: "REJECTED", label: "Descartadas" },
+];
+
+const CATEGORY_META: Record<Category, { label: string; className: string }> = {
+  VOCABULARIO: { label: "Vocabulario", className: "bg-[#DBEAFE] text-[#1D4ED8]" },
+  ERROR: { label: "Error", className: "bg-[#FEE2E2] text-[#B91C1C]" },
+  ESTILO: { label: "Estilo", className: "bg-[#EDE9FE] text-[#6D28D9]" },
+  PROCESO: { label: "Proceso", className: "bg-[#FEF3C7] text-[#92400E]" },
+  VENTA: { label: "Venta", className: "bg-[#DCFCE7] text-[#15803D]" },
+  REVISAR: { label: "Revisar dato", className: "bg-[#FFEDD5] text-[#C2410C]" },
+};
+
+const PROPOSABLE: Category[] = ["VOCABULARIO", "ERROR", "ESTILO", "PROCESO", "VENTA"];
+
+const inputClass =
+  "w-full rounded-xl border border-[#DCE5EA] bg-white px-3 py-2 text-sm text-[#0F172A] outline-none focus:border-[#D60517] focus:ring-2 focus:ring-[#D60517]/20";
+
+export default function LessonsPage() {
+  const [tab, setTab] = useState<Status>("PENDING");
+  const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [counts, setCounts] = useState<Counts>({ PENDING: 0, APPROVED: 0, REJECTED: 0 });
+  const [canApprove, setCanApprove] = useState(false);
+  const [canPropose, setCanPropose] = useState(false);
+  const [proposing, setProposing] = useState(false);
+  const [form, setForm] = useState<{ text: string; category: Category; note: string }>({ text: "", category: "PROCESO", note: "" });
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+
+  const load = useCallback(async (status: Status) => {
+    const response = await fetch(`/api/panel/whatsapp/lessons?status=${status}`, { cache: "no-store" });
+    if (!response.ok) {
+      setError("No fue posible cargar las lecciones.");
+      setLoading(false);
+      return;
+    }
+    const data = (await response.json()) as { lessons: Lesson[]; counts: Counts; canApprove: boolean; canPropose: boolean };
+    setLessons(data.lessons);
+    setCounts(data.counts);
+    setCanApprove(data.canApprove);
+    setCanPropose(data.canPropose);
+    setError(null);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    void load(tab);
+  }, [tab, load]);
+
+  async function patchLesson(id: string, body: { status?: Status; text?: string }) {
+    const response = await fetch(`/api/panel/whatsapp/lessons/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await response.json()) as { error?: string };
+    if (!response.ok) {
+      setError(data.error ?? "No fue posible guardar.");
+      return;
+    }
+    setError(null);
+    setEditingId(null);
+    await load(tab);
+  }
+
+  async function propose() {
+    setSaving(true);
+    try {
+      const response = await fetch("/api/panel/whatsapp/lessons", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = (await response.json()) as { error?: string; status?: Status; category?: Category };
+      if (!response.ok) {
+        setError(data.error ?? "No fue posible guardar la lección.");
+        return;
+      }
+      setError(null);
+      setProposing(false);
+      setForm({ text: "", category: "PROCESO", note: "" });
+      setNotice(
+        data.category === "REVISAR"
+          ? "Quedó en Revisar porque menciona datos comerciales o legales (precio, garantía, plazos…). No se enseña al bot."
+          : data.status === "APPROVED"
+            ? "Lección aprobada: el bot ya la usa."
+            : "Lección enviada. Queda pendiente de aprobación del superadmin.",
+      );
+      const next: Status = data.status === "APPROVED" ? "APPROVED" : "PENDING";
+      if (next === tab) await load(tab);
+      else setTab(next);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function analyze() {
+    setAnalyzing(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const response = await fetch("/api/panel/whatsapp/lessons/analyze", { method: "POST" });
+      const data = (await response.json()) as { analyzed?: number; created?: number; remaining?: number; error?: string };
+      if (!response.ok) {
+        setError(data.error ?? "No fue posible analizar.");
+        return;
+      }
+      setNotice(
+        `Se analizaron ${data.analyzed} conversaciones y se propusieron ${data.created} lecciones.${
+          data.remaining ? ` Quedan ${data.remaining} por revisar: vuelve a pulsar Analizar.` : ""
+        }`,
+      );
+      await load(tab);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-4xl space-y-5 p-4 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Link
+            href="/panel/whatsapp"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#DCE5EA] bg-white text-[#051C46] hover:bg-[#F1F7F8]"
+            aria-label="Volver a WhatsApp"
+          >
+            <MdArrowBack size={20} />
+          </Link>
+          <div>
+            <h1 className="flex items-center gap-2 text-lg font-bold text-[#051C46]">
+              <MdPsychology size={22} /> Lecciones de la IA
+            </h1>
+            <p className="text-xs text-[#64748B]">
+              Lo que el bot propone aprender de las conversaciones. Solo las aprobadas llegan al bot.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+        {canPropose ? (
+          <button
+            type="button"
+            onClick={() => setProposing(true)}
+            className="flex items-center gap-2 rounded-xl border border-[#051C46] bg-white px-4 py-2 text-sm font-semibold text-[#051C46] transition hover:bg-[#F1F7F8]"
+          >
+            <MdAdd size={18} /> Proponer lección
+          </button>
+        ) : null}
+        {canApprove ? (
+          <button
+            type="button"
+            onClick={analyze}
+            disabled={analyzing}
+            className="flex items-center gap-2 rounded-xl bg-[#051C46] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0E6670] disabled:opacity-60"
+          >
+            <MdAutorenew size={18} className={analyzing ? "animate-spin" : ""} />
+            {analyzing ? "Analizando…" : "Analizar conversaciones"}
+          </button>
+        ) : null}
+        </div>
+      </div>
+
+      {notice ? <p className="rounded-xl bg-[#ECFDF5] px-4 py-3 text-sm text-[#065F46]">{notice}</p> : null}
+      {error ? <p role="alert" className="rounded-xl bg-[#FEF2F2] px-4 py-3 text-sm text-[#B91C1C]">{error}</p> : null}
+
+      <div className="flex gap-1.5 rounded-xl bg-[#F1F7F8] p-1" role="tablist">
+        {TABS.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.value}
+            onClick={() => setTab(item.value)}
+            className={`flex-1 rounded-lg px-3 py-2 text-xs font-semibold transition ${
+              tab === item.value ? "bg-white text-[#051C46] shadow-sm" : "text-[#64748B] hover:text-[#051C46]"
+            }`}
+          >
+            {item.label} ({counts[item.value]})
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <p className="py-10 text-center text-sm text-[#64748B]">Cargando…</p>
+      ) : lessons.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-[#DCE5EA] bg-white py-10 text-center text-sm text-[#64748B]">
+          {tab === "PENDING" ? "No hay lecciones pendientes. Pulsa Analizar para buscar nuevas." : "Sin lecciones aquí todavía."}
+        </p>
+      ) : (
+        <ul className="space-y-3">
+          {lessons.map((lesson) => {
+            const meta = CATEGORY_META[lesson.category];
+            const isEditing = editingId === lesson.id;
+            return (
+              <li key={lesson.id} className="min-w-0 rounded-2xl border border-[#DCE5EA] bg-white p-4 shadow-sm">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${meta.className}`}>{meta.label}</span>
+                  <span className="flex items-center gap-2 text-[11px] text-[#94A3B8]">
+                    {lesson.proposedByName ? <span>Propuesta por {lesson.proposedByName}</span> : null}
+                    <time>{new Date(lesson.createdAt).toLocaleDateString("es-CO")}</time>
+                  </span>
+                </div>
+
+                {isEditing ? (
+                  <textarea
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    rows={3}
+                    maxLength={500}
+                    className={inputClass}
+                    aria-label="Editar lección"
+                  />
+                ) : (
+                  <p className="text-sm font-medium text-[#0F172A]">{lesson.text}</p>
+                )}
+
+                <details className="mt-2 text-xs text-[#64748B]">
+                  <summary className="cursor-pointer font-semibold text-[#0B2E6B]">Ver evidencia</summary>
+                  <p className="mt-1 whitespace-pre-wrap rounded-lg bg-[#F8FAFC] p-2.5">{lesson.evidence}</p>
+                </details>
+
+                {lesson.category === "REVISAR" ? (
+                  <p className="mt-2 text-[11px] text-[#C2410C]">
+                    No se enseña al bot. Corrige el dato en su fuente (catálogo, base oficial) y descarta esta nota.
+                  </p>
+                ) : null}
+
+                {canApprove ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {isEditing ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => patchLesson(lesson.id, { text: draft })}
+                          className="flex items-center gap-1.5 rounded-lg bg-[#051C46] px-3 py-1.5 text-xs font-semibold text-white"
+                        >
+                          <MdSave size={15} /> Guardar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(null)}
+                          className="rounded-lg border border-[#DCE5EA] px-3 py-1.5 text-xs font-semibold text-[#475569]"
+                        >
+                          Cancelar
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {lesson.status !== "APPROVED" && lesson.category !== "REVISAR" ? (
+                          <button
+                            type="button"
+                            onClick={() => patchLesson(lesson.id, { status: "APPROVED" })}
+                            className="flex items-center gap-1.5 rounded-lg bg-[#16A34A] px-3 py-1.5 text-xs font-semibold text-white"
+                          >
+                            <MdCheck size={15} /> Aprobar
+                          </button>
+                        ) : null}
+                        {lesson.category !== "REVISAR" ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingId(lesson.id);
+                              setDraft(lesson.text);
+                            }}
+                            className="flex items-center gap-1.5 rounded-lg border border-[#DCE5EA] px-3 py-1.5 text-xs font-semibold text-[#475569]"
+                          >
+                            <MdEdit size={15} /> Editar
+                          </button>
+                        ) : null}
+                        {lesson.status !== "REJECTED" ? (
+                          <button
+                            type="button"
+                            onClick={() => patchLesson(lesson.id, { status: "REJECTED" })}
+                            className="flex items-center gap-1.5 rounded-lg border border-[#FECACA] px-3 py-1.5 text-xs font-semibold text-[#B91C1C]"
+                          >
+                            <MdClose size={15} /> Descartar
+                          </button>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {proposing ? (
+        <Modal
+          title="Proponer lección"
+          onClose={() => setProposing(false)}
+          footer={
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setProposing(false)} className="rounded-lg border border-[#DCE5EA] px-3 py-2 text-xs font-semibold text-[#475569]">
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={propose}
+                disabled={saving || form.text.trim().length < 10}
+                className="rounded-lg bg-[#051C46] px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+              >
+                {saving ? "Guardando…" : "Enviar lección"}
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[#64748B]">Qué debe aprender el bot</label>
+              <textarea
+                value={form.text}
+                onChange={(event) => setForm({ ...form, text: event.target.value })}
+                rows={4}
+                maxLength={500}
+                placeholder="Ej.: Si el cliente pide el dispensador en color negro, ofrece también la versión blanca."
+                className={inputClass}
+              />
+              <p className="mt-1 text-[11px] text-[#94A3B8]">{form.text.trim().length}/500 · mínimo 10 caracteres</p>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[#64748B]">Tipo</label>
+              <SimpleSelect
+                value={form.category}
+                portal
+                options={PROPOSABLE.map((c) => ({ value: c, label: CATEGORY_META[c].label }))}
+                onChange={(value) => setForm({ ...form, category: value as Category })}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-[#64748B]">Contexto (opcional)</label>
+              <input
+                value={form.note}
+                onChange={(event) => setForm({ ...form, note: event.target.value })}
+                maxLength={300}
+                placeholder="Qué pasó o dónde lo viste"
+                className={inputClass}
+              />
+            </div>
+            <p className="text-[11px] text-[#94A3B8]">
+              Si el texto menciona precios, garantías, plazos o políticas, queda en Revisar y no se enseña al bot.
+            </p>
+          </div>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}

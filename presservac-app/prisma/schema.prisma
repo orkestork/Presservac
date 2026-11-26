@@ -1,0 +1,2692 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Product {
+  id                    String                  @id @default(cuid())
+  slug                  String                  @unique
+  sku                   String?                 @unique
+  oemReference          String?
+  alternativeReferences String[]                @default([])
+  category              String
+  name                  String
+  brand                 String
+  price                 Int
+  previousPrice         Int
+  stock                 Int                     @default(12)
+  reservedStock         Int                     @default(0)
+  minimumStock          Int                     @default(3)
+  image                 String
+  galleryImages         String[]                @default([])
+  availability          String
+  description           String
+  application           String?
+  compatibility         String[]                @default([])
+  warranty              String?
+  technicalSpecs        Json?
+  featured              Boolean                 @default(false)
+  active                Boolean                 @default(true)
+  isOutlet              Boolean                 @default(false)
+  outletExpiresAt       DateTime?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  colorVariants         Json?                   @default("[]")
+  presentationVariants  Json?                   @default("[]")
+  presentationVariantsManaged Boolean          @default(false)
+  videoUrl              String?
+  campaigns             Campaign[]
+  inventoryMovements    InventoryMovement[]
+  priceHistory          PriceHistory[]
+  saleCalculatorItems   SaleCalculatorItem[]
+  quotationItems        QuotationItem[]
+  productionRuns        ProductionRun[]
+  assemblyRuns          AssemblyRun[]
+  productionOrderItems  ProductionOrderItem[]
+  comboItems            ComboItem[]
+  warehouseStocks       ProductWarehouseStock[]
+  warehouseMovements    WarehouseMovement[]
+  packPrices            ProductPackPrice[]
+}
+
+model ProductPackPrice {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label      String
+  qty        Int
+  totalPrice Int
+  order      Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([productId])
+}
+
+model User {
+  id                       String             @id @default(cuid())
+  fullName                 String
+  company                  String?
+  email                    String             @unique
+  phone                    String?
+  department               String?
+  city                     String?
+  avatarUrl                String?
+  addressLine1             String?
+  addressLine2             String?
+  passwordHash             String
+  role                     UserRole           @default(CUSTOMER)
+  status                   UserStatus         @default(ACTIVE)
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+  level                    CustomerLevel      @default(AQUA)
+  points                   Int                @default(0)
+  bonusBalance             Int                @default(0)
+  bonusExpiry              DateTime?
+  kTier                    String             @default("NONE")
+  monthlyPeriod            String             @default("")
+  whatsappPhone            String?
+  // Verificación suave del correo: null = pendiente (no bloquea la compra).
+  emailVerifiedAt          DateTime?
+  // Aceptación de la política de tratamiento de datos y los términos al registrarse.
+  acceptedTermsAt          DateTime?
+  // Cuenta anonimizada a petición del titular; los pedidos se conservan.
+  deletedAt                DateTime?
+  // Invalidación de sesiones: un JWT con iat anterior a esta fecha deja de valer.
+  passwordChangedAt        DateTime?
+  // Quién cubre a esta persona cuando falta. Una persona puede respaldar varios puestos.
+  backupUserId             String?
+  backupUser               User?              @relation("UserBackup", fields: [backupUserId], references: [id], onDelete: SetNull)
+  backsUp                  User[]             @relation("UserBackup")
+  campaigns                Campaign[]         @relation("CampaignSeller")
+  cartItems                CartItem[]
+  assignedOrders           Order[]            @relation("AssignedOrders")
+  orders                   Order[]
+  assignedWatiConversations WatiConversation[] @relation("WatiAssignedSeller")
+  watiMessagesSent         WatiMessage[]      @relation("WatiMessageSender")
+  pointTransactions        PointTransaction[]
+  priceChanges             PriceHistory[]     @relation("PriceChangedBy")
+  rewardRedemptions        RewardRedemption[]
+  costConfig               SellerCostConfig?
+  saleCalculators          SaleCalculator[]
+  quotationsAsSeller       Quotation[]        @relation("QuotationSeller")
+  permissions              UserPermission[]
+  quotationsAsClient       Quotation[]        @relation("QuotationClient")
+  productionRuns           ProductionRun[]    @relation("ProductionOperator")
+  assemblyRuns             AssemblyRun[]      @relation("AssemblyLeader")
+  productionOrdersCreated  ProductionOrder[]  @relation("ProductionOrderCreatedBy")
+  productionOrdersApproved ProductionOrder[]  @relation("ProductionOrderApprovedBy")
+  employee                 Employee?
+  announcementReads        AnnouncementRead[]
+  rrhhNotificationReads    RrhhNotificationRead[]
+  rrhhNotificationDismissals RrhhNotificationDismissal[]
+  employeeAssetsCreated    EmployeeAsset[]        @relation("EmployeeAssetCreatedBy")
+  employeeNotesAuthored    EmployeeNote[]         @relation("EmployeeNoteAuthor")
+  candidatesCreated        Candidate[]            @relation("CandidateCreatedBy")
+  defaultCategoryFor       RequestCategory[]
+  assignedTickets          Ticket[]           @relation("TicketResponsible")
+  ticketComments           TicketComment[]
+  ticketEvents             TicketEvent[]      @relation("TicketEventActor")
+  deliveryRoutesCreated    DeliveryRoute[]    @relation("DeliveryRouteCreatedBy")
+  vehicleChecklistsCreated VehicleChecklistEntry[] @relation("VehicleChecklistCreatedBy")
+  transportCostsCreated    TransportCost[]    @relation("TransportCostCreatedBy")
+  transportIncidentsCreated TransportIncident[] @relation("TransportIncidentCreatedBy")
+  moldChanges              MoldChange[]       @relation("MoldChangeChangedBy")
+  maintenanceReported      MaintenanceOrder[] @relation("MaintenanceReportedBy")
+  maintenanceAssigned      MaintenanceOrder[] @relation("MaintenanceAssignedTo")
+  operationsReports        OperationsReport[]  @relation("OperationsReportAuthor")
+  notifications            Notification[]      @relation("NotificationTarget")
+  notificationsCreated     Notification[]      @relation("NotificationCreator")
+  notificationReads        NotificationRead[]
+  notificationDismissals   NotificationDismissal[]
+  departmentMembers        DepartmentMember[]
+  productionTimeEntries        ProductionTimeEntry[] @relation("TimeEntryOperator")
+  productionTimeEntriesCreated ProductionTimeEntry[] @relation("TimeEntryCreatedBy")
+  workOrdersCreated            WorkOrder[]           @relation("WorkOrderCreatedBy")
+  plannerTasksCreated          PlannerTask[]         @relation("PlannerTaskCreatedBy")
+  plannerAssignments           PlannerTaskAssignee[]
+  plannerComments              PlannerComment[]
+  plannerNotes                 PlannerNote[]
+  designRequestsCreated        DesignRequest[]       @relation("DesignRequester")
+  designRequestsAssigned       DesignRequest[]       @relation("DesignDesigner")
+  designVersionsUploaded       DesignVersion[]       @relation("DesignUploader")
+  designEvents                 DesignEvent[]         @relation("DesignActor")
+  plantOrdersCreated           PlantOrder[]          @relation("PlantOrderCreatedBy")
+  paymentsConfirmed            QuotationPayment[]    @relation("PaymentConfirmedBy")
+  plantStepsUpdated            PlantStep[]           @relation("PlantStepUpdatedBy")
+}
+
+model CartItem {
+  id            String   @id @default(cuid())
+  userId        String
+  productId     String?
+  comboId       String?
+  name          String
+  price         String
+  image         String
+  quantity      Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  originalPrice String?
+  sku           String?
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  combo         Combo?   @relation(fields: [comboId], references: [id])
+
+  @@unique([userId, productId])
+  @@unique([userId, comboId])
+}
+
+model Order {
+  id                 String         @id @default(cuid())
+  userId             String
+  status             OrderStatus    @default(PENDING)
+  paymentStatus      PaymentStatus  @default(PENDING)
+  shippingStatus     ShippingStatus @default(PENDING)
+  channel            OrderChannel   @default(ONLINE)
+  customerName       String
+  customerEmail      String
+  customerPhone      String
+  company            String?
+  department         String
+  city               String
+  addressLine1       String
+  addressLine2       String?
+  notes              String?
+  carrier            String?
+  trackingNumber     String?
+  adminNotes         String?
+  shippedAt          DateTime?
+  deliveredAt        DateTime?
+  subtotal           Int
+  shippingCost       Int            @default(0)
+  totalItems         Int
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  assignedSellerId   String?
+  odooOrderId        Int?
+  odooOrderName      String?
+  odooSyncStatus     OdooSyncStatus @default(NOT_SYNCED)
+  odooSyncError      String?
+  odooSyncedAt       DateTime?
+  wompiReference     String?        @unique
+  wompiTransactionId String?
+  paymentExpiresAt   DateTime?
+  deliveryRouteId    String?
+  lat                Float?
+  lng                Float?
+  stopOrder          Int?
+  trackToken         String?        @unique
+  enRouteNotifiedAt  DateTime?
+  nearNotifiedAt     DateTime?
+  deliveryAttempts   DeliveryAttempt[]
+  deliveryRoute      DeliveryRoute? @relation(fields: [deliveryRouteId], references: [id])
+  assignedSeller     User?          @relation("AssignedOrders", fields: [assignedSellerId], references: [id])
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items              OrderItem[]
+  quotation          Quotation?
+}
+
+enum OdooSyncStatus {
+  NOT_SYNCED
+  SYNCED
+  FAILED
+}
+
+enum OrderChannel {
+  ONLINE
+  WHATSAPP
+  MARKETPLACE
+  OTHER
+}
+
+model OrderItem {
+  id            String   @id @default(cuid())
+  orderId       String
+  productId     String?
+  comboId       String?
+  comboSnapshot Json?
+  name          String
+  image         String
+  unitPrice     Int
+  quantity      Int
+  lineTotal     Int
+  sku           String?
+  createdAt     DateTime @default(now())
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model InventoryMovement {
+  id         String                @id @default(cuid())
+  productId  String
+  type       InventoryMovementType
+  quantity   Int
+  stockAfter Int
+  note       String?
+  createdAt  DateTime              @default(now())
+  product    Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model PointTransaction {
+  id          String               @id @default(cuid())
+  userId      String
+  type        PointTransactionType
+  points      Int
+  balance     Int
+  description String
+  orderId     String?
+  createdAt   DateTime             @default(now())
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Reward {
+  id          String             @id @default(cuid())
+  name        String
+  description String
+  pointsCost  Int
+  image       String?
+  active      Boolean            @default(true)
+  stock       Int?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  redemptions RewardRedemption[]
+}
+
+model RewardRedemption {
+  id        String   @id @default(cuid())
+  userId    String
+  rewardId  String
+  points    Int
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+  reward    Reward   @relation(fields: [rewardId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PriceHistory {
+  id        String   @id @default(cuid())
+  productId String
+  oldPrice  Int
+  newPrice  Int
+  changedBy String
+  note      String?
+  createdAt DateTime @default(now())
+  user      User     @relation("PriceChangedBy", fields: [changedBy], references: [id])
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Campaign {
+  id             String          @id @default(cuid())
+  name           String
+  sellerId       String
+  productId      String?
+  comboId        String?
+  investment     Float           @default(0)
+  sales          Float           @default(0)
+  targetMultiple Float           @default(10)
+  status         String          @default("ACTIVE")
+  platform       String          @default("Meta Ads")
+  startDate      DateTime        @default(now())
+  endDate        DateTime?
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  leads          Int             @default(0)
+  product        Product?        @relation(fields: [productId], references: [id])
+  combo          Combo?          @relation(fields: [comboId], references: [id])
+  seller         User            @relation("CampaignSeller", fields: [sellerId], references: [id])
+  dailyEntries   CampaignDaily[]
+}
+
+model CampaignDaily {
+  id                    String   @id @default(cuid())
+  campaignId            String
+  fecha                 DateTime
+  mensajes              Int      @default(0)
+  transacciones         Int      @default(0)
+  presupuestoPublicidad Float    @default(0)
+  ventaDelDia           Float    @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  campaign              Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, fecha])
+  @@index([campaignId])
+}
+
+// Calendario de actividad comercial: cierre diario, log de reportes, config y festivos.
+model SellerDailyClose {
+  id         String   @id @default(cuid())
+  sellerId   String
+  date       DateTime
+  noSales    Boolean  @default(false)
+  totalSold  Float    @default(0)
+  closedAt   DateTime @default(now())
+  closedById String
+
+  @@unique([sellerId, date])
+}
+
+model SellerReportEvent {
+  id         String   @id @default(cuid())
+  sellerId   String
+  date       DateTime
+  campaignId String?
+  kind       String
+  value      Float    @default(0)
+  actorId    String
+  createdAt  DateTime @default(now())
+
+  @@index([sellerId, date])
+}
+
+model CalendarConfig {
+  id                String   @id @default("default")
+  deadlineMinutes   Int      @default(1200)
+  trackingStartDate DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model SellerCalendarSetting {
+  id       String  @id @default(cuid())
+  userId   String  @unique
+  workDays Int[]   @default([1, 2, 3, 4, 5, 6])
+  active   Boolean @default(true)
+}
+
+model CalendarHoliday {
+  id    String   @id @default(cuid())
+  date  DateTime @unique
+  label String
+}
+
+model SellerCostConfig {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id])
+  costoProd       Float    @default(0)
+  publicidad      Float    @default(0)
+  transporte      Float    @default(0)
+  packing         Float    @default(0)
+  recaudo         Float    @default(0)
+  imprevistos     Float    @default(5)
+  gastosFijos     Float    @default(0)
+  devolucionesPct Float    @default(0)
+  updatedAt       DateTime @updatedAt
+}
+
+model SaleCalculator {
+  id          String               @id @default(cuid())
+  userId      String
+  name        String               @default("Nuevo combo")
+  envio       Float                @default(0)
+  picking     Float                @default(0)
+  comisionPct Float                @default(2.5)
+  margenPct   Float                @default(25)
+  campanaPct  Float                @default(10)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  user        User                 @relation(fields: [userId], references: [id])
+  items       SaleCalculatorItem[]
+
+  @@index([userId])
+}
+
+model SaleCalculatorItem {
+  id             String         @id @default(cuid())
+  calculatorId   String
+  productId      String?
+  nombreProducto String
+  cantidad       Int            @default(1)
+  costoUnitario  Float          @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  calculator     SaleCalculator @relation(fields: [calculatorId], references: [id], onDelete: Cascade)
+  product        Product?       @relation(fields: [productId], references: [id])
+
+  @@index([calculatorId])
+}
+
+model Machine {
+  id        String          @id @default(cuid())
+  code      Int             @unique
+  name      String
+  brand     String
+  model     String?
+  location  String?
+  isActive  Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  runs      ProductionRun[]
+  moldChanges MoldChange[]
+  equipment   Equipment[]
+
+  @@index([isActive])
+}
+
+model ProductionRun {
+  id             String   @id @default(cuid())
+  machineId      String
+  machine        Machine  @relation(fields: [machineId], references: [id])
+  operatorId     String
+  operator       User     @relation("ProductionOperator", fields: [operatorId], references: [id])
+  productId      String?
+  product        Product? @relation(fields: [productId], references: [id])
+  orderNumber    String
+  productionDate DateTime
+  startTime      DateTime
+  endTime        DateTime
+
+  productionOrderId String?
+  productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id])
+
+  material        String
+  pigment         String?
+  injectionWeight Float
+  pieceWeight     Float
+  cycle           Float
+  cycleUnit       String @default("seconds")
+  // Cavidades del molde: piezas que salen por ciclo.
+  cavities        Int    @default(1)
+  temperature     Float
+  temperatureType String @default("simple")
+  temperatureZones Json? @default("[]")
+
+  pigmentQuantity Float?
+  pigmentColor    String?
+
+  manualProductName String?
+
+  produced      Int
+  damaged       Int @default(0)
+  nonConforming Int @default(0)
+
+  couplingTest   String?
+  couplingStatus String?
+  couplingTime   String?
+  // Foto de la prueba de acople (URL pública en Supabase Storage).
+  couplingPhotoUrl String?
+
+  observations String?
+
+  // Minutos que la máquina estuvo detenida durante la corrida.
+  downtimeMinutes Int @default(0)
+
+  // Kilos de material entregados a la máquina para la corrida.
+  materialQuantityKg Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([machineId])
+  @@index([operatorId])
+  @@index([productionDate])
+  @@index([productionOrderId])
+}
+
+/// Puesto o línea de la planta de ensamble. Equivalente a Machine en inyección.
+model AssemblyStation {
+  id        String        @id @default(cuid())
+  code      Int           @unique
+  name      String
+  location  String?
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  runs      AssemblyRun[]
+
+  @@index([isActive])
+}
+
+/// Corrida diaria de ensamble. Las unidades buenas entran a la bodega de producto terminado.
+model AssemblyRun {
+  id        String          @id @default(cuid())
+  stationId String
+  station   AssemblyStation @relation(fields: [stationId], references: [id])
+  leaderId  String
+  leader    User            @relation("AssemblyLeader", fields: [leaderId], references: [id])
+  productId String
+  product   Product         @relation(fields: [productId], references: [id])
+
+  productionOrderId String?
+  productionOrder   ProductionOrder? @relation(fields: [productionOrderId], references: [id])
+  orderNumber       String
+
+  productionDate DateTime
+  startTime      DateTime
+  endTime        DateTime
+
+  assembled     Int
+  defective     Int @default(0)
+  nonConforming Int @default(0)
+  reworked      Int @default(0)
+
+  workerCount Int
+  laborHours  Float
+
+  defectReason String?
+  observations String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([stationId])
+  @@index([leaderId])
+  @@index([productId])
+  @@index([productionDate])
+  @@index([productionOrderId])
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+  SELLER
+  PACKING
+  SUPERADMIN
+  RRHH
+  EMPLOYEE
+  BODEGA
+  DISENO
+  MARKETING
+  JEFE_VENTAS
+  TESORERIA
+  INGENIERIA
+  LOGISTICA
+  LIDER_ENSAMBLE
+  LIDER_INYECCION
+  MANTENIMIENTO
+  JEFE_OPERACIONES
+  DIRECTOR_OPERACIONES
+  OPERARIO
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum PanelModule {
+  MODULE_DASHBOARD
+  MODULE_PEDIDOS
+  MODULE_PRODUCTOS
+  MODULE_METRICAS
+  MODULE_CAMPANAS
+  MODULE_COSTOS
+  MODULE_CALCULADORA_PRECIO
+  MODULE_COTIZACIONES
+  MODULE_PRODUCCION
+  MODULE_ODOO
+  MODULE_USUARIOS
+  MODULE_BANNERS
+  MODULE_COMBOS
+  MODULE_MIS_COMBOS
+  MODULE_RRHH
+  MODULE_OUTLET
+  MODULE_BODEGAS
+  MODULE_WHATSAPP
+  MODULE_MATERIAL
+  MODULE_LOGISTICA
+  MODULE_MANTENIMIENTO
+  MODULE_ENSAMBLE
+  MODULE_TICKETS
+  MODULE_CONTROL_PRODUCCION
+  MODULE_TAREAS
+  MODULE_DISENO
+  MODULE_DISENO_APROBAR
+  MODULE_PLANTA
+  MODULE_FINANZAS
+}
+
+enum BannerType {
+  CATEGORY
+  SITE
+}
+
+model Banner {
+  id           String     @id @default(cuid())
+  key          String     @unique
+  type         BannerType
+  title1       String?
+  title2       String?
+  desktopImage String?
+  mobileImage  String?
+  link         String?
+  metadata     Json?
+  active       Boolean    @default(true)
+  order        Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model ChatLead {
+  id          String   @id @default(cuid())
+  name        String?
+  city        String?
+  quantity    String?
+  whatsapp    String?
+  lastMessage String
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model AppConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// Bitácora de acciones sensibles (login de admin, gestión de usuarios, permisos,
+/// modo de venta, borrado de cuenta). Sin relación con User: se conserva aunque el
+/// actor se elimine. RLS deny-all + policy service_role (patrón del proyecto).
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorEmail String
+  action     String
+  entity     String
+  entityId   String?
+  meta       Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+}
+
+enum WatiConversationStatus {
+  ACTIVE
+  CLOSED
+}
+
+enum WatiSalesStage {
+  NEW
+  IN_PROGRESS
+  FOLLOW_UP
+  SOLD
+}
+
+enum WatiMessageRole {
+  USER
+  ASSISTANT
+  AGENT
+}
+
+model WatiConversation {
+  id                 String                 @id @default(cuid())
+  phone              String                 @unique
+  contactName        String?
+  status             WatiConversationStatus @default(ACTIVE)
+  salesStage         WatiSalesStage         @default(NEW)
+  notes              String?
+  botPaused          Boolean                @default(false)
+  moderationStrikes  Int                    @default(0)
+  lastAutoReplyAt    DateTime?
+  comboImageSentAt   DateTime?
+  comboVideoSentAt   DateTime?
+  aiContextStartedAt DateTime?
+  memorySummary      String?
+  memorySummaryThrough DateTime?
+  orderId            String?
+  assignedSellerId   String?
+  assignedSeller     User?                  @relation("WatiAssignedSeller", fields: [assignedSellerId], references: [id])
+  followUpSentAt     DateTime?
+  commercialStage    WatiCommercialStage    @default(DISCOVERY)
+  /// Estado estructurado (Sistema Maestro §49 capa 4), lo extrae la IA tras cada intercambio.
+  customerCity       String?
+  businessType       String?
+  chosenProductSlug  String?
+  quantityRequested  Int?
+  lastObjection      String?
+  dispatchDataComplete Boolean              @default(false)
+  remarketingStage   Int                    @default(0)
+  remarketingNextAt  DateTime?
+  remarketingStartedAt DateTime?
+  remarketingOptOut  Boolean                @default(false)
+  /// Última vez que la IA analizó esta conversación para proponer lecciones (una sola vez).
+  lessonsAnalyzedAt  DateTime?
+  /// Upselling (guía maestra v2): ofertas adicionales hechas, si hay una sin responder y si el cliente ya dijo no / la ignoró.
+  upsellOffers       Int                    @default(0)
+  upsellPending      Boolean                @default(false)
+  upsellDeclined     Boolean                @default(false)
+  remarketingUsed    Json                   @default("{}")
+  /// Archivada por inactividad (cron wati-archive); se desarchiva sola cuando alguien escribe.
+  archivedAt         DateTime?
+  /// Última vez que alguien abrió el chat en el panel; los USER posteriores cuentan como no leídos.
+  lastReadAt         DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  messages           WatiMessage[]
+  remarketingEvents  WatiRemarketingEvent[]
+
+  @@index([status, updatedAt])
+  @@index([salesStage, updatedAt])
+  @@index([followUpSentAt])
+  @@index([remarketingNextAt])
+  @@index([archivedAt, updatedAt])
+}
+
+enum WatiCommercialStage {
+  DISCOVERY
+  PRODUCT_SHOWN
+  PRICE_SHOWN
+  QUANTITY_REQUESTED
+  QUOTE_SENT
+  OBJECTION_PRICE
+  OBJECTION_THINKING
+  PURCHASE_INTENT
+  CHECKOUT
+  CLOSED
+  LOST
+}
+
+/// Un mensaje de remarketing enviado; base de las métricas de recuperación.
+model WatiRemarketingEvent {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   WatiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  stage          Int
+  productSlug    String?
+  message        String
+  goal           String?
+  usedBenefit    String?
+  usedCta        String?
+  sentAt         DateTime         @default(now())
+  repliedAt      DateTime?
+  outcome        String           @default("PENDING")
+
+  @@index([conversationId, sentAt])
+  @@index([stage, outcome])
+}
+
+model WatiMessage {
+  id             String           @id @default(cuid())
+  externalId     String?          @unique
+  conversationId String
+  role           WatiMessageRole
+  content        String
+  /// "image" | "audio" | "video"… Entrantes: el binario se pide a WATI por externalId; salientes: mediaUrls.
+  mediaType      String?
+  mediaUrls      String[]         @default([])
+  /// Salientes: "DELIVERED" | "READ" según los eventos de estado de WATI; null = enviado.
+  deliveryStatus String?
+  /// WatiMessage.id del mensaje citado (respuesta de WhatsApp), sin FK para no bloquear borrados.
+  replyToId      String?
+  senderId       String?
+  sender         User?            @relation("WatiMessageSender", fields: [senderId], references: [id])
+  createdAt      DateTime         @default(now())
+  conversation   WatiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([senderId, role, createdAt])
+}
+
+model Combo {
+  id            String      @id @default(cuid())
+  slug          String      @unique
+  sku           String      @unique
+  name          String
+  description   String?
+  image         String?
+  galleryImages String[]    @default([])
+  price         Int
+  active        Boolean     @default(true)
+  createdByName String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  items         ComboItem[]
+  cartItems     CartItem[]
+  campaigns     Campaign[]
+}
+
+model ComboItem {
+  id        String  @id @default(cuid())
+  comboId   String
+  combo     Combo   @relation(fields: [comboId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int     @default(1)
+
+  @@index([comboId])
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  EXPIRED
+}
+
+enum ShippingStatus {
+  PENDING
+  PREPARING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum InventoryMovementType {
+  CREATED
+  ADJUSTMENT
+  ORDER_DEDUCTION
+  RESERVED
+  RELEASED
+}
+
+enum CustomerLevel {
+  AQUA
+  CORAL
+  OCEAN
+  DIAMOND_SEAL
+}
+
+enum PointTransactionType {
+  EARNED
+  REDEEMED
+  EXPIRED
+  ADJUSTED
+  BONUS
+}
+
+model KommoToken {
+  id           String   @id @default(cuid())
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model KommoSyncLog {
+  id          String          @id @default(cuid())
+  entityType  String
+  entityId    String
+  kommoId     Int?
+  status      KommoSyncStatus @default(PENDING)
+  operation   String
+  error       String?
+  retries     Int             @default(0)
+  lastAttempt DateTime?
+  syncedAt    DateTime?
+  payload     Json?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([entityType, entityId])
+  @@index([status])
+}
+
+enum KommoSyncStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCESS
+  FAILED
+  ABANDONED
+}
+
+model Quotation {
+  id               String          @id @default(cuid())
+  number           String          @unique
+  sellerId         String
+  seller           User            @relation("QuotationSeller", fields: [sellerId], references: [id])
+  clientId         String?
+  client           User?           @relation("QuotationClient", fields: [clientId], references: [id])
+  // Datos del cliente tal como salen en la cotización (puede ser un prospecto sin cuenta).
+  clientName       String          @default("")
+  clientNit        String?
+  clientAddress    String?
+  clientCity       String?
+  clientContact    String?
+  clientEmail      String?
+  clientPhone      String?
+  // Claves de tiempos de entrega marcados (ver lib/quotation-terms.ts).
+  deliveryKeys     String[]        @default([])
+  // Cláusula de fotopolímeros, diseño y sherpa a cargo del cliente.
+  printClause      Boolean         @default(false)
+  status           QuotationStatus @default(DRAFT)
+  paymentTerms     String?
+  notes            String?
+  validUntil       DateTime?
+  convertedOrderId String?         @unique
+  convertedOrder   Order?          @relation(fields: [convertedOrderId], references: [id])
+  sentAt           DateTime?
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  items            QuotationItem[]
+  designRequests   DesignRequest[]
+  plantOrders      PlantOrder[]
+  // Confirmación de pago por financiera (antes de diseño).
+  paymentStatus      QuotationPaymentStatus @default(NONE)
+  paymentRequestedAt DateTime?
+  paymentConfirmedAt DateTime?
+  // Comprobante que adjunta comercial al pedir la confirmación.
+  paymentProofKey    String?
+  paymentProofName   String?
+  paymentProofMime   String?
+  financeNote        String?
+  payments           QuotationPayment[]
+
+  @@index([sellerId])
+  @@index([clientId])
+}
+
+model QuotationItem {
+  id             String    @id @default(cuid())
+  quotationId    String
+  quotation      Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  productId      String?
+  product        Product?  @relation(fields: [productId], references: [id])
+  name           String
+  reference      String?
+  manualImageUrl String?
+  quantity       Int       @default(1)
+  unitPrice      Int       @default(0)
+  order          Int       @default(0)
+  // Ficha técnica del empaque (vacío en líneas como fotopolímeros).
+  structure      String?   // PAPE | LAMINADO
+  bagType        String?   // COJIN | DOYPACK | FLOWPACK
+  widthCm        Float?
+  lengthCm       Float?
+  microns        Int?
+  gussetCm       Float?
+  zipper         Boolean   @default(false)
+  valve          Boolean   @default(false)
+  unit           String    @default("UND")
+  // Cálculo por kilo (hoja de cotización): si pricePerKg está, el precio unitario se calcula.
+  kilos          Float?
+  pricePerKg     Int?
+  wastePct       Float?
+  zipperPerCm    Float?
+
+  @@index([quotationId])
+}
+
+model QuotationTaxConfig {
+  id            String   @id @default(cuid())
+  reteIcaPct    Float    @default(0)
+  reteFuentePct Float    @default(0)
+  ivaPct        Float    @default(19)
+  isActive      Boolean  @default(true)
+  updatedAt     DateTime @updatedAt
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+model ProductionOrder {
+  id             String                @id @default(cuid())
+  number         String                @unique
+  productionDate DateTime
+  area           ProductionArea        @default(INYECCION)
+  status         ProductionOrderStatus @default(DRAFT)
+  notes          String?
+  createdById    String
+  createdBy      User                  @relation("ProductionOrderCreatedBy", fields: [createdById], references: [id])
+  approvedById   String?
+  approvedBy     User?                 @relation("ProductionOrderApprovedBy", fields: [approvedById], references: [id])
+  approvedAt     DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  items          ProductionOrderItem[]
+  runs           ProductionRun[]
+  assemblyRuns   AssemblyRun[]
+
+  @@index([createdById])
+  @@index([status])
+  @@index([area])
+}
+
+model ProductionOrderItem {
+  id                String          @id @default(cuid())
+  productionOrderId String
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product         @relation(fields: [productId], references: [id])
+  quantity          Int
+  destination       String?
+  notes             String?
+  order             Int             @default(0)
+
+  @@index([productionOrderId])
+  @@index([productId])
+}
+
+enum ProductionArea {
+  INYECCION
+  ENSAMBLE
+}
+
+enum ProductionOrderStatus {
+  DRAFT
+  APPROVED
+  IN_PRODUCTION
+  COMPLETED
+  CANCELLED
+}
+
+model UserPermission {
+  id        String      @id @default(cuid())
+  userId    String
+  module    PanelModule
+  canView   Boolean     @default(false)
+  canCreate Boolean     @default(false)
+  canEdit   Boolean     @default(false)
+  canDelete Boolean     @default(false)
+  updatedBy String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, module])
+  @@index([userId])
+}
+
+model Department {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  employees Employee[]
+}
+
+model Employee {
+  id              String         @id @default(cuid())
+  userId          String         @unique
+  employeeCode    String         @unique
+  jobTitle        String
+  departmentId    String?
+  contractType    ContractType   @default(INDEFINITE)
+  status          EmployeeStatus @default(ACTIVE)
+  managerId       String?
+  site            String?
+  hireDate        DateTime
+  terminationDate DateTime?
+  salaryAmount    Int?
+  salaryCurrency  String         @default("COP")
+  salaryPeriod    SalaryPeriod   @default(MONTHLY)
+  eps             String?
+  afp             String?
+  arl             String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id])
+
+  manager       Employee?  @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  directReports Employee[] @relation("EmployeeManager")
+
+  timeOffRequests     TimeOffRequest[]
+  attendanceRecords   AttendanceRecord[]
+  documents           EmployeeDocument[]
+  overtimeRequests    OvertimeRequest[]
+  payslips            Payslip[]
+  benefitRequests     BenefitRequest[]
+  certificateRequests CertificateRequest[]
+  tickets             Ticket[]
+  assets              EmployeeAsset[]
+  notes               EmployeeNote[]
+
+  @@index([departmentId])
+  @@index([managerId])
+}
+
+model CertificateRequest {
+  id            String        @id @default(cuid())
+  employeeId    String
+  includeSalary Boolean       @default(false)
+  status        TimeOffStatus @default(PENDING)
+  reviewNote    String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+}
+
+model TimeOffRequest {
+  id               String          @id @default(cuid())
+  employeeId       String
+  type             TimeOffType
+  subType          PermitSubType?
+  startDate        DateTime
+  endDate          DateTime
+  durationDays     Int
+  hours            Float?
+  startTime        String?
+  endTime          String?
+  reason           String?
+  attachmentUrl    String?
+  attachmentName   String?
+  status           TimeOffStatus   @default(PENDING)
+  reviewNote       String?
+  isPaid           Boolean?
+  incapacityNumber String?
+  incapacityType   IncapacityType?
+  epsName          String?
+  treatingDoctor   String?
+  diagnosis        String?
+  diagnosisCode    String?
+  issueDate        DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+}
+
+enum TimeOffType {
+  VACATION
+  PERMIT
+  LEAVE
+  INCAPACITY
+  UNPAID
+}
+
+enum IncapacityType {
+  ENFERMEDAD_GENERAL
+  ACCIDENTE_LABORAL
+  ENFERMEDAD_LABORAL
+  MATERNIDAD
+  PATERNIDAD
+}
+
+enum PermitSubType {
+  CITA_MEDICA
+  CALAMIDAD_DOMESTICA
+  LUTO
+  MATERNIDAD
+  PATERNIDAD
+  DILIGENCIA_JUDICIAL
+  SINDICAL
+  ESTUDIO
+  PERSONAL
+  NO_REMUNERADO
+  MEDIO_DIA
+  HORAS
+  OTRO
+}
+
+enum TimeOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model AttendanceRecord {
+  id         String           @id @default(cuid())
+  employeeId String
+  date       DateTime
+  status     AttendanceStatus @default(PRESENT)
+  checkIn    String?
+  checkOut   String?
+  note       String?
+  createdAt  DateTime         @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+}
+
+enum ContractType {
+  INDEFINITE
+  FIXED_TERM
+  WORK_OR_LABOR
+  APPRENTICESHIP
+  TEMPORARY
+  CIVIL
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+enum SalaryPeriod {
+  MONTHLY
+  BIWEEKLY
+  HOURLY
+}
+
+enum WarehouseMovementType {
+  ENTRADA
+  SALIDA
+  TRANSFERENCIA
+}
+
+enum WarehouseMovementSource {
+  USER
+  ODOO
+  SYSTEM
+}
+
+model Warehouse {
+  id            String                  @id @default(cuid())
+  key           String                  @unique
+  name          String
+  order         Int
+  stocks        ProductWarehouseStock[]
+  movementsFrom WarehouseMovement[]     @relation("MovementFrom")
+  movementsTo   WarehouseMovement[]     @relation("MovementTo")
+}
+
+model ProductWarehouseStock {
+  id          String    @id @default(cuid())
+  productId   String
+  warehouseId String
+  quantity    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productId, warehouseId])
+  @@index([warehouseId])
+  @@index([productId])
+}
+
+model WarehouseMovement {
+  id              String                  @id @default(cuid())
+  productId       String
+  type            WarehouseMovementType
+  source          WarehouseMovementSource
+  quantity        Int
+  fromWarehouseId String?
+  toWarehouseId   String?
+  note            String?
+  userId          String
+  createdAt       DateTime                @default(now())
+  product         Product                 @relation(fields: [productId], references: [id], onDelete: Cascade)
+  fromWarehouse   Warehouse?              @relation("MovementFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouse     Warehouse?              @relation("MovementTo", fields: [toWarehouseId], references: [id])
+
+  @@index([productId])
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
+}
+
+model Announcement {
+  id          String               @id @default(cuid())
+  title       String
+  body        String
+  authorName  String?
+  category    AnnouncementCategory @default(GENERAL)
+  imageUrl    String?
+  isImportant Boolean              @default(false)
+  isActive    Boolean              @default(true)
+  scheduledAt DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  reads AnnouncementRead[]
+}
+
+enum AnnouncementCategory {
+  GENERAL
+  RRHH
+  EVENTOS
+  BIENESTAR
+  TECNOLOGIA
+  SST
+  COMERCIAL
+  PRODUCCION
+}
+
+model AnnouncementRead {
+  id             String   @id @default(cuid())
+  announcementId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([userId])
+}
+
+/// CRM interno de RRHH: pipeline de reclutamiento. No tiene relación con Kommo
+/// (CRM de clientes/ventas) ni con Wati (IA de WhatsApp para ventas) — este es
+/// 100% interno, sin WhatsApp ni integraciones externas.
+model Candidate {
+  id        String          @id @default(cuid())
+  fullName  String
+  email     String?
+  phone     String?
+  position  String
+  stage     CandidateStage  @default(POSTULADO)
+  source    String?
+  notes     String?
+  resumeUrl String?
+  createdById String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  createdBy User? @relation("CandidateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([stage])
+}
+
+enum CandidateStage {
+  POSTULADO
+  ENTREVISTA
+  PRUEBA
+  OFERTA
+  CONTRATADO
+  DESCARTADO
+}
+
+/// Bitácora de seguimiento de RRHH sobre un colaborador ya contratado
+/// (no confundir con Candidate, que es antes de la contratación).
+model EmployeeNote {
+  id         String           @id @default(cuid())
+  employeeId String
+  authorId   String
+  type       EmployeeNoteType @default(SEGUIMIENTO)
+  note       String
+  createdAt  DateTime         @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  author   User     @relation("EmployeeNoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+}
+
+enum EmployeeNoteType {
+  SEGUIMIENTO
+  LLAMADO_ATENCION
+  RECONOCIMIENTO
+  OTRO
+}
+
+/// Dotación y equipos entregados a un colaborador (portátil, uniforme, EPP, celular…).
+/// No tiene relación con el stock de producto para venta, que vive en Warehouse.
+model EmployeeAsset {
+  id          String            @id @default(cuid())
+  employeeId  String
+  type        EmployeeAssetType @default(OTRO)
+  name        String
+  serial      String?
+  status      EmployeeAssetStatus @default(ENTREGADO)
+  deliveredAt DateTime
+  returnedAt  DateTime?
+  notes       String?
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  employee  Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("EmployeeAssetCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@index([status])
+}
+
+enum EmployeeAssetType {
+  COMPUTO
+  MOVIL
+  UNIFORME
+  EPP
+  HERRAMIENTA
+  MOBILIARIO
+  VEHICULO
+  OTRO
+}
+
+enum EmployeeAssetStatus {
+  ENTREGADO
+  DEVUELTO
+  DANADO
+  PERDIDO
+}
+
+/// Estado de "leído" del feed de notificaciones de RRHH.
+/// El feed se deriva de los eventos reales ya existentes (solicitudes, tickets,
+/// anuncios); aquí solo se guarda qué marcó como leído cada usuario.
+/// `key` tiene la forma "<tipo>:<id>", ej. "ticket:abc123".
+model RrhhNotificationRead {
+  id     String   @id @default(cuid())
+  userId String
+  key    String
+  readAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+/// Descarte de un ítem del feed derivado de RRHH, por usuario. El feed no tiene
+/// filas propias (se deriva de solicitudes, tickets y comunicados), así que el
+/// borrado se guarda contra la clave "<tipo>:<id>" y solo oculta para quien borra.
+model RrhhNotificationDismissal {
+  id          String   @id @default(cuid())
+  userId      String
+  key         String
+  dismissedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId, dismissedAt])
+}
+
+model EmployeeDocument {
+  id             String               @id @default(cuid())
+  employeeId     String
+  category       EmployeeDocumentType
+  name           String
+  fileUrl        String
+  fileName       String
+  fileSize       Int?
+  expiresAt      DateTime?
+  uploadedBySelf Boolean              @default(false)
+  createdAt      DateTime             @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+}
+
+enum EmployeeDocumentType {
+  CONTRATO
+  CERTIFICADO
+  COMPROBANTE_PAGO
+  OTRO
+}
+
+model OvertimeRequest {
+  id           String        @id @default(cuid())
+  employeeId   String
+  date         DateTime
+  startTime    String
+  endTime      String
+  hours        Float
+  overtimeType OvertimeType
+  reason       String?
+  status       TimeOffStatus @default(PENDING)
+  reviewNote   String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+}
+
+enum OvertimeType {
+  DIURNA
+  NOCTURNA
+  DOMINICAL_FESTIVA_DIURNA
+  DOMINICAL_FESTIVA_NOCTURNA
+}
+
+model Payslip {
+  id          String   @id @default(cuid())
+  employeeId  String
+  period      String
+  grossAmount Int
+  deductions  Int
+  netAmount   Int
+  fileUrl     String?
+  fileName    String?
+  createdAt   DateTime @default(now())
+
+  // Tesorería: flujo de caja de nómina
+  paymentDueDate DateTime?
+  isPaid         Boolean   @default(false)
+  paidAt         DateTime?
+
+  // Contabilidad: desglose legal de aportes. Null = sin desglose cargado (no inventar).
+  epsAmount     Int?
+  arlAmount     Int?
+  pensionAmount Int?
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+}
+
+model Benefit {
+  id          String          @id @default(cuid())
+  title       String
+  description String
+  detail      String?
+  category    BenefitCategory @default(OTRO)
+  imageUrl    String?
+  frequency   String?
+  isFeatured  Boolean         @default(false)
+  isActive    Boolean         @default(true)
+  expiresAt   DateTime?
+  order       Int             @default(0)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  requests BenefitRequest[]
+}
+
+enum BenefitCategory {
+  SALUD
+  EDUCACION
+  BIENESTAR
+  CONVENIOS
+  BONIFICACIONES
+  RECONOCIMIENTOS
+  OTRO
+}
+
+model BenefitRequest {
+  id         String        @id @default(cuid())
+  benefitId  String
+  employeeId String
+  status     TimeOffStatus @default(PENDING)
+  note       String?
+  reviewNote String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  benefit  Benefit  @relation(fields: [benefitId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([benefitId])
+  @@index([employeeId])
+}
+
+enum TicketPriority {
+  BAJA
+  MEDIA
+  ALTA
+  URGENTE
+}
+
+enum TicketStatus {
+  PENDIENTE
+  EN_PROCESO
+  ESPERANDO_RESPUESTA
+  FINALIZADO
+  CANCELADO
+}
+
+model RequestCategory {
+  id                   String   @id @default(cuid())
+  name                 String   @unique
+  icon                 String?
+  fieldsSchema         Json     @default("[]")
+  defaultResponsibleId String?
+  allowedDepartmentIds String[] @default([])
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  defaultResponsible User?    @relation(fields: [defaultResponsibleId], references: [id])
+  tickets            Ticket[]
+}
+
+model Ticket {
+  id            String         @id @default(cuid())
+  code          String         @unique
+  employeeId    String
+  categoryId    String
+  priority      TicketPriority @default(MEDIA)
+  subject       String
+  description   String
+  location      String?
+  extraFields   Json           @default("{}")
+  status        TicketStatus   @default(PENDIENTE)
+  responsibleId String?
+  dueDate       DateTime?
+  resolvedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  employee    Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  category    RequestCategory    @relation(fields: [categoryId], references: [id])
+  responsible User?              @relation("TicketResponsible", fields: [responsibleId], references: [id])
+  attachments TicketAttachment[]
+  comments    TicketComment[]
+  events      TicketEvent[]
+
+  @@index([employeeId])
+  @@index([categoryId])
+  @@index([responsibleId])
+  @@index([status])
+}
+
+model TicketAttachment {
+  id        String   @id @default(cuid())
+  ticketId  String
+  url       String
+  name      String
+  size      Int?
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+}
+
+model TicketComment {
+  id        String   @id @default(cuid())
+  ticketId  String
+  userId    String
+  message   String
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([ticketId])
+}
+
+model TicketEvent {
+  id        String   @id @default(cuid())
+  ticketId  String
+  actorId   String?
+  type      String
+  field     String?
+  fromValue String?
+  toValue   String?
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor  User?  @relation("TicketEventActor", fields: [actorId], references: [id])
+
+  @@index([ticketId])
+}
+
+model ProductionDepartment {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  area        String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members DepartmentMember[]
+}
+
+enum DepartmentMemberKind {
+  HOLDER
+  BACKUP
+}
+
+model DepartmentMember {
+  id           String               @id @default(cuid())
+  departmentId String
+  userId       String?
+  name         String?
+  email        String?
+  title        String
+  kind         DepartmentMemberKind @default(HOLDER)
+  order        Int                  @default(0)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  department ProductionDepartment @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  user       User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([departmentId])
+  @@index([userId])
+}
+
+model SolutionVideo {
+  id        String   @id @default(cuid())
+  title     String
+  videoUrl  String
+  thumbUrl  String?
+  order     Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([order])
+}
+
+model MaterialFolder {
+  id          String   @id @default(cuid())
+  name        String
+  isPrivate   Boolean  @default(false)
+  parentId    String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  parent   MaterialFolder?  @relation("MaterialFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children MaterialFolder[] @relation("MaterialFolderTree")
+  files    MaterialFile[]
+
+  @@index([parentId])
+}
+
+model MaterialFile {
+  id          String   @id @default(cuid())
+  folderId    String?
+  name        String
+  path        String
+  mimeType    String?
+  size        Int?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  folder MaterialFolder? @relation(fields: [folderId], references: [id], onDelete: Cascade)
+
+  @@index([folderId])
+}
+
+// ─── Operaciones: Logística ─────────────────────────────────────────────
+
+enum VehicleType {
+  CAMIONETA
+  MOTO
+  FURGON
+  CAMION
+}
+
+enum DeliveryRouteStatus {
+  PLANNED
+  IN_PROGRESS
+  DONE
+}
+
+enum TransportCostCategory {
+  COMBUSTIBLE
+  MANTENIMIENTO
+  PEAJES
+  OTRO
+}
+
+enum TransportIncidentStatus {
+  OPEN
+  RESOLVED
+}
+
+model LogisticsCustomer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  address   String
+  city      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Driver {
+  id         String              @id @default(cuid())
+  fullName   String
+  phone      String?
+  active     Boolean             @default(true)
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+  routes     DeliveryRoute[]
+  incidents  TransportIncident[]
+  checklistEntries VehicleChecklistEntry[]
+}
+
+model Vehicle {
+  id                 String              @id @default(cuid())
+  plate              String              @unique
+  type               VehicleType
+  active             Boolean             @default(true)
+  soatDue            DateTime?
+  technicalReviewDue DateTime?
+  policyDue          DateTime?
+  operationCardDue   DateTime?
+  extinguisherDue    DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  routes             DeliveryRoute[]
+  costs              TransportCost[]
+  incidents          TransportIncident[]
+  checklistEntries   VehicleChecklistEntry[]
+}
+
+model VehicleChecklistEntry {
+  id          String   @id @default(cuid())
+  vehicleId   String
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id])
+  driverId    String
+  driver      Driver   @relation(fields: [driverId], references: [id])
+  date        DateTime
+  items       Json
+  initials    String?
+  notes       String?
+  createdById String
+  createdBy   User     @relation("VehicleChecklistCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@unique([vehicleId, date])
+  @@index([date])
+}
+
+model DeliveryRoute {
+  id          String              @id @default(cuid())
+  date        DateTime
+  vehicleId   String
+  driverId    String
+  status      DeliveryRouteStatus @default(PLANNED)
+  notes       String?
+  trackToken  String?             @unique
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  distanceKm  Float?
+  durationMin Int?
+  createdById String
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  positions   VehiclePosition[]
+  attempts    DeliveryAttempt[]
+  vehicle     Vehicle             @relation(fields: [vehicleId], references: [id])
+  driver      Driver              @relation(fields: [driverId], references: [id])
+  createdBy   User                @relation("DeliveryRouteCreatedBy", fields: [createdById], references: [id])
+  orders      Order[]
+
+  @@index([date])
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([status])
+}
+
+model VehiclePosition {
+  id         String        @id @default(cuid())
+  routeId    String
+  route      DeliveryRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  lat        Float
+  lng        Float
+  speed      Float?
+  accuracy   Float?
+  recordedAt DateTime      @default(now())
+
+  @@unique([routeId, recordedAt])
+}
+
+enum DeliveryOutcome {
+  DELIVERED
+  FAILED
+}
+
+model DeliveryAttempt {
+  id             String          @id @default(cuid())
+  orderId        String
+  routeId        String
+  outcome        DeliveryOutcome
+  reason         String?
+  note           String?
+  photoPath      String?
+  lat            Float?
+  lng            Float?
+  accuracy       Float?
+  distanceM      Float?
+  idempotencyKey String          @unique
+  recordedAt     DateTime        @default(now())
+  order          Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  route          DeliveryRoute   @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([routeId])
+}
+
+model TransportCost {
+  id          String                @id @default(cuid())
+  vehicleId   String
+  date        DateTime
+  category    TransportCostCategory
+  amount      Int
+  notes       String?
+  createdById String
+  createdAt   DateTime              @default(now())
+  vehicle     Vehicle               @relation(fields: [vehicleId], references: [id])
+  createdBy   User                  @relation("TransportCostCreatedBy", fields: [createdById], references: [id])
+
+  @@index([vehicleId])
+  @@index([date])
+}
+
+model TransportIncident {
+  id               String                  @id @default(cuid())
+  vehicleId        String?
+  driverId         String?
+  date             DateTime
+  type             String
+  description      String
+  correctiveAction String?
+  status           TransportIncidentStatus @default(OPEN)
+  photoPath        String?
+  fromDriverApp    Boolean                 @default(false)
+  createdById      String
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  vehicle          Vehicle?                @relation(fields: [vehicleId], references: [id])
+  driver           Driver?                 @relation(fields: [driverId], references: [id])
+  createdBy        User                    @relation("TransportIncidentCreatedBy", fields: [createdById], references: [id])
+
+  @@index([date])
+  @@index([status])
+}
+
+// ─── Operaciones: Producción (moldes) ───────────────────────────────────
+
+enum MoldStatus {
+  AVAILABLE
+  IN_USE
+  MAINTENANCE
+}
+
+model Mold {
+  id          String       @id @default(cuid())
+  code        String       @unique
+  name        String
+  status      MoldStatus   @default(AVAILABLE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  changes     MoldChange[]
+  equipment   Equipment[]
+}
+
+model MoldChange {
+  id          String    @id @default(cuid())
+  machineId   String
+  moldId      String
+  startedAt   DateTime
+  finishedAt  DateTime?
+  changedById String
+  notes       String?
+  createdAt   DateTime  @default(now())
+  machine     Machine   @relation(fields: [machineId], references: [id])
+  mold        Mold      @relation(fields: [moldId], references: [id])
+  changedBy   User      @relation("MoldChangeChangedBy", fields: [changedById], references: [id])
+
+  @@index([machineId])
+  @@index([moldId])
+  @@index([startedAt])
+}
+
+// ─── Operaciones: Mantenimiento ─────────────────────────────────────────
+
+enum EquipmentType {
+  MACHINE
+  MOLD
+  TOOL
+  INFRA
+}
+
+enum EquipmentStatus {
+  OPERATIVE
+  DOWN
+  MAINTENANCE
+}
+
+enum MaintenanceType {
+  PREVENTIVE
+  CORRECTIVE
+}
+
+enum MaintenancePriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum MaintenanceStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum InventoryItemCategory {
+  SPARE_PART
+  TOOL
+}
+
+enum MaintenanceQuoteStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PURCHASED
+}
+
+model Equipment {
+  id        String             @id @default(cuid())
+  name      String
+  code      String             @unique
+  type      EquipmentType
+  machineId String?
+  moldId    String?
+  location  String?
+  // Foto para reconocer la máquina + documento adjunto (manual/ficha técnica).
+  imageUrl       String?
+  attachmentUrl  String?
+  attachmentName String?
+  status    EquipmentStatus    @default(OPERATIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  machine   Machine?           @relation(fields: [machineId], references: [id])
+  mold      Mold?              @relation(fields: [moldId], references: [id])
+  orders    MaintenanceOrder[]
+
+  @@index([type])
+  @@index([status])
+}
+
+model MaintenanceOrder {
+  id              String              @id @default(cuid())
+  number          String              @unique
+  equipmentId     String
+  type            MaintenanceType
+  priority        MaintenancePriority @default(MEDIUM)
+  status          MaintenanceStatus   @default(PENDING)
+  reportedAt      DateTime            @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  downtimeMinutes Int?
+  description     String
+  resolution      String?
+  // Firma de conformidad al completar: PNG como data URL (~10 KB), sin Storage.
+  signatureData   String?
+  signedByName    String?
+  signedAt        DateTime?
+  // Firma del técnico que ejecutó el trabajo (la de arriba es de quien recibe).
+  executorSignatureData String?
+  executorName          String?
+  // Adjuntos de la orden: [{ url, name, isImage }] (fotos de la falla, documentos).
+  attachments     Json                @default("[]")
+  reportedById    String
+  assignedToId    String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  equipment       Equipment           @relation(fields: [equipmentId], references: [id])
+  reportedBy      User                @relation("MaintenanceReportedBy", fields: [reportedById], references: [id])
+  assignedTo      User?               @relation("MaintenanceAssignedTo", fields: [assignedToId], references: [id])
+  quotes          MaintenanceQuote[]
+
+  @@index([equipmentId])
+  @@index([status])
+  @@index([priority])
+  @@index([reportedAt])
+}
+
+model InventoryItem {
+  id        String                @id @default(cuid())
+  name      String
+  code      String                @unique
+  category  InventoryItemCategory
+  stock     Int                   @default(0)
+  minStock  Int                   @default(0)
+  unit      String                @default("und")
+  location  String?
+  // Foto del repuesto/herramienta + documento adjunto (ficha técnica).
+  imageUrl       String?
+  attachmentUrl  String?
+  attachmentName String?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+
+  @@index([category])
+}
+
+model MaintenanceQuote {
+  id                 String                 @id @default(cuid())
+  maintenanceOrderId String?
+  supplier           String
+  description        String
+  amount             Int
+  status             MaintenanceQuoteStatus @default(REQUESTED)
+  // Adjuntos: [{ url, name, isImage }] (cotización del proveedor, fotos).
+  attachments        Json                   @default("[]")
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  maintenanceOrder   MaintenanceOrder?      @relation(fields: [maintenanceOrderId], references: [id])
+
+  @@index([maintenanceOrderId])
+  @@index([status])
+}
+
+// ─── Operaciones: Informes periódicos ───────────────────────────────────
+
+model OperationsReport {
+  id          String      @id @default(cuid())
+  module      PanelModule
+  periodStart DateTime
+  periodEnd   DateTime
+  authorId    String
+  kpis        Json
+  notes       String?
+  // Adjuntos: [{ url, name, isImage }] (soportes del informe).
+  attachments Json        @default("[]")
+  createdAt   DateTime    @default(now())
+  author      User        @relation("OperationsReportAuthor", fields: [authorId], references: [id])
+
+  @@index([module])
+  @@index([periodStart])
+  @@index([authorId])
+}
+
+// ─── Tareas del panel (tablero tipo Planner) ────────────────────────────
+
+enum PlannerStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum PlannerPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model PlannerTask {
+  id          String           @id @default(cuid())
+  title       String
+  description String?
+  status      PlannerStatus    @default(PENDING)
+  priority    PlannerPriority  @default(MEDIUM)
+  dueDate     DateTime?
+  // Orden dentro de la columna (para el drag & drop del tablero).
+  position    Int              @default(0)
+  // Etiquetas: ["Compras", "Urgente"].
+  labels      Json             @default("[]")
+  // Checklist: [{ id, text, done }].
+  checklist   Json             @default("[]")
+  // Adjuntos: [{ url, name, isImage }].
+  attachments Json             @default("[]")
+  createdById String
+  completedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  createdBy   User             @relation("PlannerTaskCreatedBy", fields: [createdById], references: [id])
+  assignees   PlannerTaskAssignee[]
+  comments    PlannerComment[]
+
+  @@index([status])
+  @@index([dueDate])
+  @@index([createdById])
+}
+
+model PlannerTaskAssignee {
+  taskId String
+  userId String
+  task   PlannerTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId])
+}
+
+model PlannerComment {
+  id        String      @id @default(cuid())
+  taskId    String
+  authorId  String
+  message   String
+  createdAt DateTime    @default(now())
+  task      PlannerTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author    User        @relation(fields: [authorId], references: [id])
+
+  @@index([taskId])
+}
+
+// Notas personales: solo las ve su dueño.
+model PlannerNote {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String   @default("")
+  content   String   @default("")
+  color     String   @default("#FEF3C7")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, updatedAt])
+}
+
+// ─── Notificaciones generales del panel ─────────────────────────────────
+
+model Notification {
+  id           String   @id @default(cuid())
+  type         String   // "order" | "quotation" | "ticket" | "production" | "inventory" | "logistics" | "maintenance" | "hr" | "user" | "campaign" | "announcement"
+  category     String   // sub-tipo: "new_order", "stock_low", etc.
+  title        String
+  detail       String
+  href         String?
+  severity     String   @default("info") // "info" | "warning" | "urgent"
+  targetRoles  String   @default("[]")   // JSON array de UserRole targets
+  targetUserId String?
+  createdById  String?
+  metadata     Json?
+  emailSent    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  targetUser User?    @relation("NotificationTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  creator    User?    @relation("NotificationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  reads      NotificationRead[]
+  dismissals NotificationDismissal[]
+
+  @@index([type, createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([createdAt])
+}
+
+model NotificationRead {
+  id             String   @id @default(cuid())
+  notificationId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt])
+}
+
+/// Descarte de una notificación por usuario: la oculta solo para quien la
+/// elimina, sin borrarla para los demás destinatarios (rol o a otros usuarios).
+model NotificationDismissal {
+  id             String   @id @default(cuid())
+  notificationId String
+  userId         String
+  dismissedAt    DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, dismissedAt])
+}
+
+// ─── Control de Producción (planta ensamble/empaque) ─────────────
+
+enum PlantSection {
+  ENSAMBLE
+  EMPAQUE
+}
+
+enum WorkOrderStatus {
+  OPEN
+  CLOSED
+}
+
+/// ODT de planta (Control de Producción). Correlativo propio que continúa el del Excel de planta.
+model WorkOrder {
+  id               String                @id @default(cuid())
+  number           Int                   @unique
+  /// Fecha civil guardada como `${d}T12:00:00.000Z` (convención de ensamble).
+  date             DateTime
+  reference        String
+  productName      String
+  client           String                @default("PRESSERVAC")
+  lot              Int?
+  /// UNI LOTE
+  quantity         Int
+  /// UNI PROD; obligatoria al cerrar.
+  producedQuantity Int?
+  status           WorkOrderStatus       @default(OPEN)
+  notes            String?
+  closedAt         DateTime?
+  createdById      String?
+  createdBy        User?                 @relation("WorkOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  entries          ProductionTimeEntry[]
+
+  @@index([status])
+  @@index([date])
+}
+
+/// Operación estándar de la hoja TIEMPOS. standardSeconds = 0 → indirecta (no cuenta para eficiencia).
+model StandardOperation {
+  id              String                @id @default(cuid())
+  code            String                @unique
+  name            String
+  family          String
+  standardSeconds Float
+  isActive        Boolean               @default(true)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  entries         ProductionTimeEntry[]
+
+  @@index([family])
+}
+
+/// Bloque de trabajo de un operario. Varios registros con el mismo inicio–fin forman un solo bloque.
+model ProductionTimeEntry {
+  id              String            @id @default(cuid())
+  operatorId      String
+  operator        User              @relation("TimeEntryOperator", fields: [operatorId], references: [id], onDelete: Restrict)
+  createdById     String?
+  createdBy       User?             @relation("TimeEntryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// Fecha civil `${d}T12:00:00.000Z`.
+  workDate        DateTime
+  /// Hora de reloj guardada como UTC: `${d}T${HH:mm}:00.000Z`.
+  startTime       DateTime
+  endTime         DateTime
+  section         PlantSection
+  workOrderId     String?
+  workOrder       WorkOrder?        @relation(fields: [workOrderId], references: [id], onDelete: Restrict)
+  operationId     String
+  operation       StandardOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+  /// Snapshot del estándar al registrar: editar el catálogo no reescribe eficiencias viejas.
+  standardSeconds Float
+  quantity        Int
+  /// Personas que comparten la tarea ("DIVIDIR ENTRE DOS" → 2).
+  sharedBy        Int               @default(1)
+  observations    String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([operatorId, workDate])
+  @@index([workDate])
+  @@index([workOrderId])
+  @@index([operationId])
+}
+
+enum WatiLessonCategory {
+  VOCABULARIO
+  ERROR
+  ESTILO
+  PROCESO
+  VENTA
+  /// Posible dato incorrecto (precio, garantía, política…): no se inyecta al bot, solo se avisa al superadmin.
+  REVISAR
+}
+
+enum WatiLessonStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Lección propuesta por la IA tras analizar conversaciones. Solo las APPROVED llegan al prompt del bot.
+model WatiLesson {
+  id             String             @id @default(cuid())
+  text           String
+  category       WatiLessonCategory
+  status         WatiLessonStatus   @default(PENDING)
+  /// Fragmento de la conversación que originó la lección.
+  evidence       String
+  conversationId String?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  /// Asesor o superadmin que la propuso a mano; null si salió del análisis automático.
+  proposedById   String?
+  createdAt      DateTime           @default(now())
+
+  @@index([status, createdAt])
+}
+
+// ─── Diseño: arte de cada referencia impresa (paso 2 del proceso, después de cotizar) ──
+
+enum DesignStatus {
+  AWAITING_PAYMENT   // Comercial la pasó, financiera aún no confirma el pago
+  PENDING            // Comercial la pasó; nadie la ha tomado
+  IN_PROGRESS        // El diseñador trabaja (o le pidieron cambios)
+  INTERNAL_REVIEW    // Revisión interna de diseño
+  COMMERCIAL_REVIEW  // Aprobación final del comercial
+  APPROVED
+  CANCELLED
+}
+
+model DesignRequest {
+  id            String          @id @default(cuid())
+  number        Int             @unique @default(autoincrement())
+  quotationId   String
+  quotation     Quotation       @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  // Copia de la línea cotizada (los ítems de la cotización se reemplazan al guardarla).
+  reference     String
+  description   String          @default("")
+  widthCm       Float?
+  lengthCm      Float?
+  brief         String?
+  dueDate       DateTime?
+  status        DesignStatus    @default(PENDING)
+  requestedById String
+  requestedBy   User            @relation("DesignRequester", fields: [requestedById], references: [id])
+  designerId    String?
+  designer      User?           @relation("DesignDesigner", fields: [designerId], references: [id], onDelete: SetNull)
+  approvedAt    DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  versions      DesignVersion[]
+  events        DesignEvent[]
+  plantOrder    PlantOrder?
+
+  @@index([quotationId])
+  @@index([status])
+}
+
+model DesignVersion {
+  id           String        @id @default(cuid())
+  requestId    String
+  request      DesignRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  version      Int
+  fileUrl      String
+  fileKey      String
+  fileName     String
+  mimeType     String
+  size         Int
+  note         String?
+  uploadedById String
+  uploadedBy   User          @relation("DesignUploader", fields: [uploadedById], references: [id])
+  createdAt    DateTime      @default(now())
+
+  @@unique([requestId, version])
+}
+
+model DesignEvent {
+  id        String        @id @default(cuid())
+  requestId String
+  request   DesignRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actorId   String
+  actor     User          @relation("DesignActor", fields: [actorId], references: [id])
+  type      String        // CREATED | TAKEN | UPLOADED | INTERNAL_APPROVED | INTERNAL_CHANGES | COMMERCIAL_APPROVED | COMMERCIAL_CHANGES | CANCELLED
+  comment   String?
+  version   Int?
+  createdAt DateTime      @default(now())
+
+  @@index([requestId])
+}
+
+// ─── Producción de empaques (paso 3: después del arte aprobado) ──
+// Las fases salen de una ruta (plantilla) y se copian a cada orden.
+
+model PlantRoute {
+  id        String   @id @default(cuid())
+  name      String
+  bagType   String?  // COJIN | DOYPACK | FLOWPACK; null = ruta por defecto
+  // [{ name, description, unit, onlyIfPrinted }]
+  phases    Json
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum PlantOrderStatus {
+  PENDING      // Por programar
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+model PlantOrder {
+  id              String           @id @default(cuid())
+  number          Int              @unique @default(autoincrement())
+  quotationId     String
+  quotation       Quotation        @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  designRequestId String?          @unique
+  designRequest   DesignRequest?   @relation(fields: [designRequestId], references: [id], onDelete: SetNull)
+  reference       String
+  description     String           @default("")
+  structure       String?
+  bagType         String?
+  widthCm         Float?
+  lengthCm        Float?
+  gussetCm        Float?
+  microns         Int?
+  zipper          Boolean          @default(false)
+  valve           Boolean          @default(false)
+  printed         Boolean          @default(false)
+  quantity        Int
+  dueDate         DateTime?
+  notes           String?
+  routeName       String
+  status          PlantOrderStatus @default(PENDING)
+  // Después de producción: financiera (saldo) → logística → conductor → financiera cierra.
+  stage             FulfillmentStage @default(PRODUCTION)
+  releasedAt        DateTime?
+  releasedById      String?
+  balanceApprovedAt DateTime?
+  balanceApprovedById String?
+  balanceNote       String?
+  closedAt          DateTime?
+  closedById        String?
+  shipment          Shipment?
+  createdById     String
+  createdBy       User             @relation("PlantOrderCreatedBy", fields: [createdById], references: [id])
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  steps           PlantStep[]
+
+  @@index([status])
+  @@index([quotationId])
+}
+
+enum PlantStepStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  SKIPPED
+}
+
+model PlantStep {
+  id          String          @id @default(cuid())
+  orderId     String
+  order       PlantOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  position    Int
+  name        String
+  description String?
+  unit        String          @default("und")
+  status      PlantStepStatus @default(PENDING)
+  responsible String?
+  outputQty   Float?
+  wasteKg     Float?
+  notes       String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  updatedById String?
+  updatedBy   User?           @relation("PlantStepUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, position])
+}
+
+// ─── Financiera: confirmación de pago del cliente (paso entre cotización y diseño) ──
+
+enum QuotationPaymentStatus {
+  NONE        // Nadie lo ha pedido
+  REQUESTED   // Comercial pasó a diseño; financiera debe confirmar
+  CONFIRMED
+}
+
+model QuotationPayment {
+  id            String    @id @default(cuid())
+  quotationId   String
+  quotation     Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  kind          String    // ANTICIPO | TOTAL | CREDITO
+  amount        Int       @default(0)
+  method        String?   // TRANSFERENCIA | CONSIGNACION | EFECTIVO | TARJETA | OTRO
+  reference     String?
+  paidAt        DateTime
+  receiptKey    String?
+  receiptName   String?
+  receiptMime   String?
+  notes         String?
+  confirmedById String
+  confirmedBy   User      @relation("PaymentConfirmedBy", fields: [confirmedById], references: [id])
+  createdAt     DateTime  @default(now())
+
+  @@index([quotationId])
+}
+
+// ─── Despacho y entrega (después de producción) ──
+
+enum FulfillmentStage {
+  PRODUCTION     // En planta
+  BALANCE_CHECK  // Operación liberó: financiera verifica el saldo
+  LOGISTICS      // Financiera aprobó: logística coordina el envío
+  IN_TRANSIT     // Despachado: conductor / transportadora
+  DELIVERED      // Entregado con soporte: financiera cierra
+  CLOSED         // Pedido finalizado
+}
+
+model Shipment {
+  id             String     @id @default(cuid())
+  orderId        String     @unique
+  order          PlantOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  mode           String     // PROPIO | TRANSPORTADORA | RECOGE
+  scheduledDate  DateTime?
+  address        String     @default("")
+  city           String     @default("")
+  contactName    String?
+  contactPhone   String?
+  driverName     String?
+  driverPhone    String?
+  vehiclePlate   String?
+  carrierName    String?
+  trackingNumber String?
+  packages       Int?
+  notes          String?
+  // Enlace del conductor (sin usuario): /entrega/<token>
+  token          String     @unique
+  dispatchedAt   DateTime?
+  dispatchedById String?
+  deliveredAt    DateTime?
+  receiverName   String?
+  receiverDoc    String?
+  signatureKey   String?
+  photoKeys      String[]   @default([])
+  deliveryNotes  String?
+  lat            Float?
+  lng            Float?
+  // Novedades del conductor: [{ at, text }]
+  incidents      Json       @default("[]")
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+}

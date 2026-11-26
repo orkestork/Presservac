@@ -1,0 +1,103 @@
+import Image from "next/image";
+import Link from "next/link";
+import FooterContact from "./footer-contact";
+
+const colPoliticas = [
+  { label: "Políticas de privacidad", href: "/politicas/privacidad" },
+  { label: "Garantía de Productos", href: "/politicas/garantia" },
+  { label: "Devoluciones", href: "/politicas/devoluciones" },
+  { label: "Tratamiento de datos personales", href: "/politicas/tratamiento-datos" },
+  { label: "Ver todas las políticas", href: "/politicas" },
+];
+
+const colContacto = [
+  {
+    label: "Calle 4 #34a-48, Bogotá",
+    href: "https://www.google.com/maps/search/?api=1&query=Calle+4+%2334a-48+Bogota+Colombia",
+    icon: "/icono-ubicacion.png",
+  },
+];
+
+export default function SiteFooter() {
+  return (
+    <footer className="relative mb-[-4rem] mt-10 overflow-hidden pb-[4rem] md:mt-0 lg:mb-0 lg:pb-0" style={{ background: "#050C14", color: "#fff" }}>
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_48%_18%,rgba(111,199,195,0.56)_0%,rgba(24,121,121,0.42)_28%,rgba(5,12,20,0)_66%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(100deg,#020814_0%,#052c33_33%,#0d6e6d_53%,#062d35_73%,#020814_100%)] opacity-90" />
+      <div className="relative z-10 mx-auto max-w-[1440px] px-8 py-14 sm:px-10 md:px-16 md:py-16 lg:px-24">
+        <div className="grid gap-10 md:grid-cols-[1.25fr_0.9fr_1.15fr] md:items-start md:gap-16">
+          {/* Brand */}
+          <div className="flex justify-center md:justify-start md:pt-16">
+            <Link href="/" className="inline-flex">
+              <Image
+                src="/logo-white.png"
+                alt="Presservac"
+                width={260}
+                height={72}
+                className="h-auto w-[210px] sm:w-[260px] md:w-[280px]"
+              />
+            </Link>
+          </div>
+
+          <div className="text-left">
+            <p className="mb-6 text-[18px] font-extrabold leading-none text-white">Políticas</p>
+            <ul className="space-y-3">
+              {colPoliticas.map((item) => (
+                <li key={item.label}>
+                  <Link
+                    href={item.href}
+                    className="text-[16px] leading-snug text-white transition-colors hover:text-white/75 md:text-[18px]"
+                  >
+                    {item.label}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="flex flex-col items-start gap-8 text-left sm:flex-row sm:items-center sm:gap-10">
+            <div>
+            <p className="mb-6 text-[18px] font-extrabold leading-none text-white">
+              Departamento comercial
+            </p>
+            <ul className="space-y-3">
+              <FooterContact />
+              {colContacto.map((item) => (
+                <li key={item.label}>
+                  <a
+                    href={item.href}
+                    target={item.href.startsWith("http") ? "_blank" : undefined}
+                    rel={item.href.startsWith("http") ? "noreferrer" : undefined}
+                    className="flex items-start gap-4 whitespace-pre-line text-[16px] leading-[1.12] text-white transition-colors hover:text-white/75 md:text-[18px]"
+                  >
+                    <Image
+                      src={item.icon}
+                      alt=""
+                      width={24}
+                      height={24}
+                      className="mt-[-2px] h-6 w-6 shrink-0 brightness-0 invert"
+                    />
+                    {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            </div>
+            <Image
+              src="/logo-ficha.png"
+              alt="FICHA"
+              width={5636}
+              height={3090}
+              className="h-auto w-[130px] shrink-0"
+            />
+          </div>
+        </div>
+        <p className="mt-12 border-t border-white/20 pt-6 text-center text-[13px] leading-relaxed text-white/80">
+          PRESSERVAC · Calle 4 #34a-48, Bogotá D.C. · gestioncomercial@presservac.com.co ·{" "}
+          <a href="https://www.sic.gov.co" target="_blank" rel="noreferrer" className="underline hover:text-white">
+            Superintendencia de Industria y Comercio
+          </a>
+        </p>
+      </div>
+    </footer>
+  );
+}

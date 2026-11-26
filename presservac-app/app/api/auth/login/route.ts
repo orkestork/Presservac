@@ -1,0 +1,132 @@
+import { authenticateUser, getUserById } from "@/lib/users";
+import { checkAdminPin, setSessionCookie } from "@/lib/auth";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { getPanelLandingPath } from "@/lib/permissions";
+import { PANEL_ROLES } from "@/lib/permission-defaults";
+import { auditLoginFailure, auditNewLoginIp, logAudit } from "@/lib/audit";
+
+export async function POST(request: Request) {
+  let attemptedEmail = "";
+  try {
+    const body = (await request.json()) as {
+      email?: string;
+      password?: string;
+      adminPin?: string;
+    };
+
+    const email = body.email?.trim() || "";
+    attemptedEmail = email;
+    const password = body.password || "";
+    const adminPin = body.adminPin?.trim() || "";
+
+    if (!email || !password) {
+      return Response.json(
+        { error: "Ingresa tu correo y contraseña." },
+        { status: 400 },
+      );
+    }
+
+    if (!(await checkRateLimit(`login:${getClientIp(request)}:${email}`, 10, 10 * 60 * 1000))) {
+      return Response.json(
+        { error: "Demasiados intentos. Espera unos minutos e intenta de nuevo." },
+        { status: 429, headers: { "Retry-After": "600" } },
+      );
+    }
+
+    const user = await authenticateUser(email, password);
+    // Cuentas administrativas (ADMIN y SUPERADMIN) piden un PIN adicional.
+    const needsPin = user.role === "ADMIN" || user.role === "SUPERADMIN";
+
+    if (needsPin && checkAdminPin("") === "unset") {
+      console.error("ADMIN_EXTRA_PIN no está configurada: login de ADMIN bloqueado.");
+      return Response.json(
+        { error: "PIN de administrador no configurado. Contacta al superadministrador." },
+        { status: 500 },
+      );
+    }
+
+    if (needsPin && !adminPin) {
+      return Response.json(
+        {
+          requiresAdminPin: true,
+          user: {
+            id: user.id,
+            role: user.role,
+          },
+          message: "Confirma el PIN adicional para entrar al panel.",
+        },
+        { status: 202 },
+      );
+    }
+
+    if (needsPin && checkAdminPin(adminPin) !== "ok") {
+      await logAudit({
+        actorId: user.id,
+        actorEmail: user.email,
+        action: "admin.login_pin_failed",
+        entity: "user",
+        entityId: user.id,
+        ip: getClientIp(request),
+      });
+      return Response.json(
+        { error: "El PIN de administrador es incorrecto." },
+        { status: 403 },
+      );
+    }
+
+    await auditNewLoginIp(user, getClientIp(request));
+
+    await setSessionCookie({
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+    });
+
+    if (user.role === "ADMIN" || user.role === "SUPERADMIN") {
+      await logAudit({
+        actorId: user.id,
+        actorEmail: user.email,
+        action: "admin.login",
+        entity: "user",
+        entityId: user.id,
+        ip: getClientIp(request),
+      });
+    }
+
+    const fullUser = PANEL_ROLES.includes(user.role) ? await getUserById(user.id) : null;
+
+    const redirectTo =
+      user.role === "ADMIN"      ? "/admin"      :
+      user.role === "SUPERADMIN" ? "/panel"      :
+      user.role === "PACKING"    ? "/panel/empaque" :
+      user.role === "EMPLOYEE"   ? "/empleado"   :
+      PANEL_ROLES.includes(user.role) ? await getPanelLandingPath(fullUser!) :
+      "/mi-cuenta";
+
+    return Response.json({
+      user,
+      redirectTo,
+      message: "Inicio de sesión correcto.",
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_CREDENTIALS") {
+      await auditLoginFailure(attemptedEmail, getClientIp(request), "invalid_credentials");
+      return Response.json({ error: "Correo o contraseña incorrectos." }, { status: 401 });
+    }
+
+    if (error instanceof Error && error.message === "USER_NOT_ACTIVE") {
+      return Response.json({ error: "Esta cuenta está inactiva o suspendida." }, { status: 403 });
+    }
+
+    const message =
+      error instanceof Error && error.message === "DATABASE_NOT_CONFIGURED"
+        ? "La base de datos no está configurada todavía."
+        : "No fue posible iniciar sesión.";
+
+    const debug = process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "1"
+      ? (error instanceof Error ? error.message : String(error))
+      : undefined;
+
+    return Response.json({ error: message, debug }, { status: 500 });
+  }
+}

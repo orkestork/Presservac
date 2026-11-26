@@ -1,0 +1,43 @@
+import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { getSessionFromCookies } from "@/lib/auth";
+import { getOrdersForUser } from "@/lib/orders";
+import { getUserById } from "@/lib/users";
+import { getPanelLandingPath } from "@/lib/permissions";
+import { PANEL_ROLES } from "@/lib/permission-defaults";
+import AccountProfileForm from "./profile-form";
+
+export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Mi cuenta",
+};
+
+
+export default async function MiCuentaPage() {
+  const session = await getSessionFromCookies();
+
+  if (!session) {
+    // proxy.ts ya dejó pasar la cookie (JWT válido), así que aquí la cuenta ya no
+    // existe o no está activa: hay que limpiar la cookie o /login rebota en bucle.
+    redirect("/api/auth/session-expired");
+  }
+
+  const user = await getUserById(session.userId);
+
+  if (!user) {
+    // Cookie válida pero el usuario ya no existe: hay que limpiar la sesión antes
+    // de mandar a /login, si no proxy.ts rebota de vuelta aquí en bucle.
+    redirect("/api/auth/session-expired");
+  }
+
+  if (user.role === "ADMIN") redirect("/admin");
+  if (user.role === "SUPERADMIN") redirect("/panel");
+  if (user.role === "PACKING") redirect("/panel/empaque");
+  if (user.role === "EMPLOYEE") redirect("/empleado");
+  if (PANEL_ROLES.includes(user.role)) redirect(await getPanelLandingPath(user));
+
+  const orders = await getOrdersForUser(session.userId);
+
+  return <AccountProfileForm user={user} orders={orders} emailVerified={Boolean(user.emailVerifiedAt)} />;
+}

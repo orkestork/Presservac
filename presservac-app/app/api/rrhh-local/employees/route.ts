@@ -1,0 +1,132 @@
+import { hash } from "bcryptjs";
+import { requireRRHH } from "@/lib/permissions";
+import { prisma } from "@/lib/prisma";
+import { broadcastPanelUpdate } from "@/lib/realtime";
+import { logAudit } from "@/lib/audit";
+import { getClientIp } from "@/lib/rate-limit";
+
+export async function GET() {
+  const access = await requireRRHH();
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+
+  if (!prisma) return Response.json({ error: "Base de datos no disponible" }, { status: 503 });
+
+  const employees = await prisma.employee.findMany({
+    orderBy: { createdAt: "desc" },
+    include: {
+      user: { select: { fullName: true, email: true } },
+      department: { select: { name: true } },
+    },
+  });
+
+  return Response.json(employees);
+}
+
+export async function POST(request: Request) {
+  const access = await requireRRHH();
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+
+  if (!prisma) return Response.json({ error: "Base de datos no disponible" }, { status: 503 });
+
+  const body = await request.json();
+  const {
+    fullName,
+    email,
+    cedula,
+    jobTitle,
+    departmentId,
+    contractType,
+    hireDate,
+    salaryAmount,
+    salaryPeriod,
+    eps,
+    afp,
+    arl,
+    managerId,
+  } = body as {
+    fullName?: string;
+    email?: string;
+    cedula?: string;
+    jobTitle?: string;
+    departmentId?: string;
+    contractType?: string;
+    hireDate?: string;
+    salaryAmount?: number;
+    salaryPeriod?: string;
+    eps?: string;
+    afp?: string;
+    arl?: string;
+    managerId?: string;
+  };
+
+  const normalizedEmail = email?.trim().toLowerCase();
+  const normalizedCedula = cedula?.trim();
+
+  if (!fullName?.trim() || !normalizedEmail || !normalizedCedula || !jobTitle || !hireDate) {
+    return Response.json(
+      { error: "nombre, correo, cédula, cargo y fecha de ingreso son obligatorios" },
+      { status: 400 },
+    );
+  }
+
+  const existingEmployeeCount = await prisma.employee.count();
+  if (existingEmployeeCount > 0 && !managerId) {
+    return Response.json({ error: "El jefe inmediato es obligatorio" }, { status: 400 });
+  }
+
+  if (managerId) {
+    const manager = await prisma.employee.findUnique({ where: { id: managerId } });
+    if (!manager) return Response.json({ error: "Jefe inmediato no encontrado" }, { status: 404 });
+  }
+
+  const existingUser = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+  if (existingUser) {
+    return Response.json({ error: "Ya existe un usuario con este correo" }, { status: 409 });
+  }
+
+  const existingCode = await prisma.employee.findUnique({ where: { employeeCode: normalizedCedula } });
+  if (existingCode) {
+    return Response.json({ error: "Ya existe un empleado con esta cédula" }, { status: 409 });
+  }
+
+  const passwordHash = await hash(normalizedCedula, 10);
+
+  const newUser = await prisma.user.create({
+    data: {
+      fullName: fullName.trim(),
+      email: normalizedEmail,
+      passwordHash,
+      role: "EMPLOYEE",
+      // La crea RRHH con un correo que define la empresa: nace verificada.
+      emailVerifiedAt: new Date(),
+    },
+  });
+
+  const employee = await prisma.employee.create({
+    data: {
+      userId: newUser.id,
+      employeeCode: normalizedCedula,
+      jobTitle,
+      departmentId: departmentId || null,
+      managerId: managerId || null,
+      contractType: (contractType as never) || "INDEFINITE",
+      hireDate: new Date(hireDate),
+      salaryAmount: salaryAmount ?? null,
+      salaryPeriod: (salaryPeriod as never) || "MONTHLY",
+      eps: eps || null,
+      afp: afp || null,
+      arl: arl || null,
+    },
+    include: {
+      user: { select: { fullName: true, email: true } },
+      department: { select: { name: true } },
+    },
+  });
+
+  broadcastPanelUpdate("rrhh").catch(() => {});
+  await logAudit({
+    actorId: access.user.id, actorEmail: access.user.email, action: "employee.create", entity: "employee", entityId: employee.id,
+    meta: { name: employee.user.fullName, target: employee.user.email, jobTitle: employee.jobTitle }, ip: getClientIp(request),
+  });
+  return Response.json(employee, { status: 201 });
+}

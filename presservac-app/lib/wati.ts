@@ -1,0 +1,362 @@
+import { SITE_URL } from "@/lib/site";
+
+type WatiV3Error = {
+  ok?: boolean;
+  success?: boolean;
+  error?: { code?: number; message?: string } | string | null;
+  code?: number;
+  message?: string;
+  info?: string;
+  recipients?: Array<{
+    phone_number?: string;
+    errors?: Array<string | { message?: string }> | null;
+  }>;
+};
+
+type WatiV3TemplateItem = {
+  name?: string;
+  status?: string;
+  body?: string;
+  body_original?: string;
+  footer?: string | null;
+  language_option?: { key?: string; value?: string; text?: string } | string;
+  custom_params?: Array<{ name?: string; value?: string }>;
+};
+
+export type WatiTemplate = {
+  name: string;
+  status: string;
+  language: string;
+  body: string;
+  bodyOriginal: string;
+  footer: string | null;
+  parameters: Array<{ name: string; defaultValue: string }>;
+};
+
+function getWatiConfig() {
+  const rawBaseUrl = process.env.WATI_BASE_URL?.trim();
+  const token = process.env.WATI_API_TOKEN?.trim();
+  if (!token || !rawBaseUrl) throw new Error("WATI_NOT_CONFIGURED");
+
+  // La API V3 cuelga directo del host (sin tenantId en la ruta). Si WATI_BASE_URL
+  // todavía trae un path de tenant legacy, nos quedamos solo con el origin.
+  let host: string;
+  try {
+    host = new URL(rawBaseUrl).origin;
+  } catch {
+    host = rawBaseUrl.replace(/\/+$/, "");
+  }
+
+  return {
+    host,
+    authorization: token.toLowerCase().startsWith("bearer ") ? token : `Bearer ${token}`,
+    channel: process.env.WATI_CHANNEL_PHONE_NUMBER?.trim() || null,
+  };
+}
+
+/**
+ * WhatsApp permite ocultar el número: esos contactos llegan identificados por
+ * un BSUID ("CO.1234…") en vez de teléfono. WATI lo acepta como target.
+ */
+export function isWatiBsuid(value: string) {
+  return /^[A-Z]{2}\.[\w.-]+$/i.test(value.trim());
+}
+
+function normalizePhone(phone: string) {
+  return isWatiBsuid(phone) ? phone.trim() : phone.replace(/\D/g, "");
+}
+
+// V3 acepta target como "PhoneNumber" o "Channel:PhoneNumber"; fijar el canal
+// evita que el mensaje salga por otra línea conectada a la misma cuenta.
+function channelTarget(phone: string, channel: string | null) {
+  const digits = normalizePhone(phone);
+  return channel ? `${channel}:${digits}` : digits;
+}
+
+async function parseWatiResponse(response: Response) {
+  const raw = await response.text();
+  let data: WatiV3Error = {};
+
+  if (raw) {
+    try {
+      data = JSON.parse(raw) as WatiV3Error;
+    } catch {
+      if (!response.ok) throw new Error(`WATI_SEND_FAILED: ${response.status}`);
+    }
+  }
+
+  const errorMessage =
+    (typeof data.error === "object" && data.error ? data.error.message : null) ??
+    (typeof data.error === "string" ? data.error : null) ??
+    data.message ??
+    data.info ??
+    null;
+
+  if (!response.ok) {
+    throw new Error(`WATI_SEND_FAILED: ${response.status} ${errorMessage ?? "Error de WATI"}`);
+  }
+
+  if (data.ok === false || data.success === false) {
+    throw new Error(`WATI_SEND_FAILED: ${errorMessage ?? "WATI rechazó el mensaje"}`);
+  }
+
+  const receiverError = data.recipients?.find(
+    (receiver) => Array.isArray(receiver.errors) && receiver.errors.length > 0,
+  );
+  if (receiverError) {
+    const firstError = receiverError.errors?.[0];
+    const detail =
+      typeof firstError === "string"
+        ? firstError
+        : firstError?.message ?? errorMessage ?? "WATI rechazó el mensaje";
+    throw new Error(`WATI_SEND_FAILED: ${detail}`);
+  }
+
+  return data;
+}
+
+export async function sendWatiMessage(phone: string, message: string, replyContextId?: string | null) {
+  const { host, authorization, channel } = getWatiConfig();
+
+  const response = await fetch(`${host}/api/ext/v3/conversations/messages/text`, {
+    method: "POST",
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      target: channelTarget(phone, channel),
+      text: message,
+      ...(replyContextId ? { replyContextId } : {}),
+    }),
+  });
+
+  await parseWatiResponse(response);
+}
+
+const WATI_UNSUPPORTED_IMAGE_EXT = /\.(webp|avif)(\?.*)?$/i;
+
+/**
+ * WATI rechaza imágenes .webp/.avif (responde code 5003 "Message Sent Failed").
+ * Esas URLs se enrutan por nuestro conversor a PNG antes de mandarlas.
+ */
+export function toWatiImageUrl(url: string) {
+  if (!WATI_UNSUPPORTED_IMAGE_EXT.test(url)) return url;
+  return `${SITE_URL}/api/wati/image?url=${encodeURIComponent(url)}`;
+}
+
+export async function sendWatiFileFromUrl(
+  phone: string,
+  input: { url: string; fileName: string; caption: string },
+) {
+  const { host, authorization, channel } = getWatiConfig();
+
+  const response = await fetch(`${host}/api/ext/v3/conversations/messages/fileViaUrl`, {
+    method: "POST",
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      // La API V3 de fileViaUrl exige "Target" (capital) pero "file_url" en minúscula.
+      Target: channelTarget(phone, channel),
+      file_url: input.url,
+      caption: input.caption,
+    }),
+  });
+
+  await parseWatiResponse(response);
+}
+
+/**
+ * Descarga el binario de un mensaje multimedia por su ID (endpoint v3).
+ * Devuelve null si WATI no lo entrega. Usado para transcribir notas de voz.
+ */
+export async function fetchWatiMedia(
+  messageId: string,
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const { host, authorization } = getWatiConfig();
+
+  const response = await fetch(
+    `${host}/api/ext/v3/conversations/messages/file/${encodeURIComponent(messageId)}`,
+    { headers: { Authorization: authorization } },
+  );
+  if (!response.ok) return null;
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.byteLength === 0) return null;
+
+  return { buffer, contentType: response.headers.get("content-type") ?? "audio/ogg" };
+}
+
+export type WatiHistoryMessage = {
+  id?: string;
+  created?: string;
+  owner?: boolean;
+  type?: string;
+  text?: string | null;
+  operator_name?: string | null;
+  event_type?: string;
+};
+
+/** Últimos mensajes del chat según WATI (incluye lo que un asesor escribe directo en WATI). */
+export async function getWatiMessages(phone: string): Promise<WatiHistoryMessage[]> {
+  const { host, authorization } = getWatiConfig();
+  const response = await fetch(
+    `${host}/api/ext/v3/conversations/${encodeURIComponent(normalizePhone(phone))}/messages?page_size=50&page_number=1`,
+    { headers: { Authorization: authorization }, cache: "no-store" },
+  );
+  if (!response.ok) throw new Error(`WATI_MESSAGES_FAILED: ${response.status}`);
+  const data = (await response.json()) as { message_list?: WatiHistoryMessage[] };
+  return data.message_list ?? [];
+}
+
+export async function getWatiTemplates(): Promise<WatiTemplate[]> {
+  const { host, authorization, channel } = getWatiConfig();
+  const url = new URL(`${host}/api/ext/v3/messageTemplates`);
+  url.searchParams.set("page_number", "1");
+  url.searchParams.set("page_size", "100");
+  if (channel) url.searchParams.set("channel", channel);
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`WATI_TEMPLATES_FAILED: ${response.status}`);
+  }
+
+  const data = (await response.json()) as { templates?: WatiV3TemplateItem[] };
+
+  return (data.templates ?? [])
+    .filter((template) => template.name && template.status?.toUpperCase() === "APPROVED")
+    .map((template) => {
+      const bodyOriginal = template.body_original ?? template.body ?? "";
+      const configuredParameters = new Map(
+        (template.custom_params ?? [])
+          .filter((parameter) => parameter.name)
+          .map((parameter) => [parameter.name!, parameter.value ?? ""]),
+      );
+
+      for (const match of bodyOriginal.matchAll(/\{\{([^}]+)\}\}/g)) {
+        const name = match[1].trim();
+        if (!configuredParameters.has(name)) configuredParameters.set(name, "");
+      }
+
+      const languageOption = template.language_option;
+
+      return {
+        name: template.name!,
+        status: template.status!,
+        language:
+          typeof languageOption === "string"
+            ? languageOption
+            : languageOption?.text ?? languageOption?.key ?? languageOption?.value ?? "",
+        body: template.body ?? "",
+        bodyOriginal,
+        footer: template.footer ?? null,
+        parameters: Array.from(configuredParameters, ([name, defaultValue]) => ({
+          name,
+          defaultValue,
+        })),
+      };
+    })
+    .sort((a, b) => {
+      const priority = (template: WatiTemplate) => {
+        const spanish = /^(es|spanish)/i.test(template.language) ? 0 : 10;
+        const kliniu = template.name.startsWith("presservac_") ? 0 : 1;
+        return spanish + kliniu;
+      };
+
+      return priority(a) - priority(b) || a.name.localeCompare(b.name);
+    });
+}
+
+type WatiV3Contact = {
+  wa_id?: string;
+  phone?: string;
+  name?: string;
+  custom_params?: Array<{ name?: string; value?: string }>;
+};
+
+// Los nombres de la agenda cambian poco: cachear evita paginar toda la agenda
+// de WATI en cada carga del panel (que refresca en tiempo real).
+let contactNamesCache: { value: Map<string, string>; expiresAt: number } | null = null;
+const CONTACT_NAMES_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Mapa phone (digits) -> nombre de contacto, leído de la agenda de WATI.
+ * Pagina de a 100 hasta agotar `contact_list`.
+ */
+export async function getWatiContactNames(): Promise<Map<string, string>> {
+  if (contactNamesCache && contactNamesCache.expiresAt > Date.now()) {
+    return contactNamesCache.value;
+  }
+
+  const { host, authorization, channel } = getWatiConfig();
+  const names = new Map<string, string>();
+  const pageSize = 100;
+
+  for (let page = 1; page <= 100; page += 1) {
+    const url = new URL(`${host}/api/ext/v3/contacts`);
+    url.searchParams.set("page_size", String(pageSize));
+    url.searchParams.set("page_number", String(page));
+    if (channel) url.searchParams.set("channel", channel);
+
+    const response = await fetch(url, {
+      headers: { Authorization: authorization, "Content-Type": "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) break;
+
+    const data = (await response.json()) as { contact_list?: WatiV3Contact[] };
+    const list = data.contact_list ?? [];
+
+    for (const contact of list) {
+      const phone = (contact.wa_id ?? contact.phone ?? "").replace(/\D/g, "");
+      const rawName =
+        contact.name?.trim() ||
+        contact.custom_params?.find((param) => param.name === "name")?.value?.trim() ||
+        "";
+      if (phone && rawName) names.set(phone, rawName.slice(0, 80));
+    }
+
+    if (list.length < pageSize) break;
+  }
+
+  contactNamesCache = { value: names, expiresAt: Date.now() + CONTACT_NAMES_TTL_MS };
+  return names;
+}
+
+export async function sendWatiTemplateMessage(
+  phone: string,
+  templateName: string,
+  parameters: Array<{ name: string; value: string }>,
+) {
+  const { host, authorization, channel } = getWatiConfig();
+
+  const response = await fetch(`${host}/api/ext/v3/messageTemplates/send`, {
+    method: "POST",
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      ...(channel ? { channel } : {}),
+      template_name: templateName,
+      broadcast_name: `presservac_${templateName}_${Date.now()}`,
+      recipients: [
+        {
+          phone_number: normalizePhone(phone),
+          custom_params: parameters,
+        },
+      ],
+    }),
+  });
+
+  await parseWatiResponse(response);
+}

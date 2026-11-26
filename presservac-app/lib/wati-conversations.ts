@@ -1,0 +1,443 @@
+import { prisma } from "@/lib/prisma";
+import {
+  getWatiContactNames,
+  getWatiMessages,
+  getWatiTemplates,
+  sendWatiMessage,
+  sendWatiTemplateMessage,
+} from "@/lib/wati";
+
+function normalizeWhatsappPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  const normalized = digits.length === 10 ? `57${digits}` : digits;
+  if (normalized.length < 8 || normalized.length > 15) {
+    throw new Error("INVALID_PHONE");
+  }
+  return normalized;
+}
+
+function renderTemplate(
+  body: string,
+  parameters: Array<{ name: string; value: string }>,
+) {
+  const values = new Map(parameters.map((parameter) => [parameter.name, parameter.value]));
+  return body.replace(/\{\{([^}]+)\}\}/g, (_match, key: string) => values.get(key.trim()) ?? `{{${key}}}`);
+}
+
+export async function pickSellerForNewConversation() {
+  if (!prisma) return null;
+  const sellers = await prisma.user.findMany({
+    where: { role: "SELLER", whatsappPhone: { not: null } },
+    select: { id: true, _count: { select: { assignedWatiConversations: true } } },
+    orderBy: { fullName: "asc" },
+  });
+  if (sellers.length === 0) return null;
+  return sellers.sort((a, b) => a._count.assignedWatiConversations - b._count.assignedWatiConversations)[0].id;
+}
+
+// Cierres (CLOSED/SOLD) y el resto se archivan a los 7 días sin actividad (se desarchivan solos si el cliente escribe).
+const ARCHIVE_CLOSED_DAYS = 7;
+const ARCHIVE_ACTIVE_DAYS = 7;
+
+// SQL directo: updateMany reescribiría updatedAt (@updatedAt) y se perdería la última actividad real.
+export async function archiveStaleWatiConversations(now = new Date()) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  const before = (days: number) => new Date(now.getTime() - days * 864e5);
+  const archived = await prisma.$executeRaw`
+    UPDATE "WatiConversation" SET "archivedAt" = ${now}
+    WHERE "archivedAt" IS NULL AND (
+      (("status" = 'CLOSED' OR "salesStage" = 'SOLD') AND "updatedAt" < ${before(ARCHIVE_CLOSED_DAYS)})
+      OR "updatedAt" < ${before(ARCHIVE_ACTIVE_DAYS)}
+    )`;
+  return { archived };
+}
+
+export async function setWatiConversationArchived(conversationId: string, archived: boolean) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  const current = await prisma.watiConversation.findUnique({
+    where: { id: conversationId },
+    select: { updatedAt: true },
+  });
+  if (!current) throw new Error("CONVERSATION_NOT_FOUND");
+  return prisma.watiConversation.update({
+    where: { id: conversationId },
+    data: { archivedAt: archived ? new Date() : null, updatedAt: current.updatedAt },
+  });
+}
+
+export async function getAllWatiConversations(archived = false) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  const db = prisma;
+
+  const conversations = await db.watiConversation.findMany({
+    where: { archivedAt: archived ? { not: null } : null },
+    orderBy: { updatedAt: "desc" },
+    take: 500,
+    include: {
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
+      assignedSeller: { select: { id: true, fullName: true } },
+    },
+  });
+
+  // El webhook de WATI no siempre trae el nombre del remitente; para los chats
+  // nuevos lo completamos desde la agenda de WATI (cacheada) y lo persistimos.
+  const missingName = conversations.filter((conversation) => !conversation.contactName);
+  if (missingName.length > 0) {
+    try {
+      const names = await getWatiContactNames();
+      const resolved: Array<{ phone: string; name: string }> = [];
+      for (const conversation of missingName) {
+        const name = names.get(conversation.phone);
+        if (name) {
+          conversation.contactName = name;
+          resolved.push({ phone: conversation.phone, name });
+        }
+      }
+      if (resolved.length > 0) {
+        await Promise.all(
+          resolved.map(({ phone, name }) =>
+            db.watiConversation.updateMany({
+              where: { phone, contactName: null },
+              data: { contactName: name },
+            }),
+          ),
+        );
+      }
+    } catch (error) {
+      // Nunca bloqueamos el panel por la agenda de WATI: si falla, se muestra el
+      // teléfono y el nombre se completa en la próxima carga.
+      console.error("WATI_CONTACT_NAMES_LOOKUP_FAILED", error);
+    }
+  }
+
+  const orderIds = conversations.flatMap((conversation) =>
+    conversation.orderId ? [conversation.orderId] : [],
+  );
+  const orders = orderIds.length > 0
+    ? await prisma.order.findMany({
+        where: { id: { in: orderIds } },
+        select: {
+          id: true,
+          channel: true,
+          odooOrderId: true,
+          odooOrderName: true,
+          odooSyncStatus: true,
+          odooSyncError: true,
+          subtotal: true,
+          totalItems: true,
+          items: { select: { name: true, quantity: true, lineTotal: true, image: true } },
+        },
+      })
+    : [];
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
+
+  // No leídos como en WATI: mensajes del cliente posteriores a la última apertura del chat.
+  const unreadRows = await db.$queryRaw<Array<{ id: string; n: number }>>`
+    SELECT m."conversationId" AS id, COUNT(*)::int AS n
+    FROM "WatiMessage" m JOIN "WatiConversation" c ON c.id = m."conversationId"
+    WHERE m.role = 'USER' AND (c."lastReadAt" IS NULL OR m."createdAt" > c."lastReadAt")
+    GROUP BY 1`;
+  const unreadById = new Map(unreadRows.map((row) => [row.id, row.n]));
+
+  // Orden por último mensaje, no por updatedAt: los crons (lecciones, memoria, etapa)
+  // reescriben updatedAt sin que haya actividad y desordenaban la bandeja.
+  const activityAt = (c: (typeof conversations)[number]) => (c.messages[0]?.createdAt ?? c.updatedAt).getTime();
+  conversations.sort((a, b) => activityAt(b) - activityAt(a));
+
+  return conversations.map((c) => {
+    const order = c.orderId ? ordersById.get(c.orderId) : null;
+    return {
+    id: c.id,
+    phone: c.phone,
+    contactName: c.contactName,
+    status: c.status,
+    salesStage: c.salesStage,
+    notes: c.notes,
+    botPaused: c.botPaused,
+    orderId: c.orderId,
+    orderChannel: order?.channel ?? null,
+    assignedSellerId: c.assignedSellerId,
+    assignedSellerName: c.assignedSeller?.fullName ?? null,
+    odooOrderId: order?.odooOrderId ?? null,
+    odooOrderName: order?.odooOrderName ?? null,
+    odooSyncStatus: order?.odooSyncStatus ?? "NOT_SYNCED",
+    odooSyncError: order?.odooSyncError ?? null,
+    orderSubtotal: order?.subtotal ?? null,
+    orderTotalItems: order?.totalItems ?? null,
+    orderItems: order?.items ?? [],
+    followUpSentAt: c.followUpSentAt,
+    updatedAt: c.updatedAt,
+    lastMessage: c.messages[0] ?? null,
+    unreadCount: unreadById.get(c.id) ?? 0,
+    };
+  });
+}
+
+export const WATI_SALES_STAGES = ["NEW", "IN_PROGRESS", "FOLLOW_UP", "SOLD"] as const;
+export type WatiSalesStage = (typeof WATI_SALES_STAGES)[number];
+
+export async function updateWatiConversationStage(conversationId: string, salesStage: WatiSalesStage) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  if (!WATI_SALES_STAGES.includes(salesStage)) throw new Error("INVALID_SALES_STAGE");
+
+  const current = await prisma.watiConversation.findUnique({
+    where: { id: conversationId },
+    select: { orderId: true },
+  });
+  if (!current) throw new Error("CONVERSATION_NOT_FOUND");
+  if (current.orderId && salesStage !== "SOLD") {
+    throw new Error("ORDER_LINKED_STAGE_LOCKED");
+  }
+
+  return prisma.watiConversation.update({
+    where: { id: conversationId },
+    data:
+      salesStage === "SOLD"
+        ? { salesStage, status: "CLOSED", botPaused: true }
+        : { salesStage, status: "ACTIVE" },
+  });
+}
+
+export async function updateWatiConversationNotes(conversationId: string, notes: string) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  return prisma.watiConversation.update({
+    where: { id: conversationId },
+    data: { notes: notes.trim().slice(0, 2000) || null },
+  });
+}
+
+export async function updateWatiConversationBotPaused(conversationId: string, botPaused: boolean) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+
+  const current = await prisma.watiConversation.findUnique({
+    where: { id: conversationId },
+    select: { orderId: true, salesStage: true },
+  });
+  if (!current) throw new Error("CONVERSATION_NOT_FOUND");
+
+  const startsNewSale =
+    !botPaused && (current.orderId !== null || current.salesStage === "SOLD");
+
+  return prisma.watiConversation.update({
+    where: { id: conversationId },
+    data: startsNewSale
+      ? {
+          botPaused: false,
+          status: "ACTIVE",
+          salesStage: "NEW",
+          orderId: null,
+          aiContextStartedAt: new Date(),
+          memorySummary: null,
+          memorySummaryThrough: null,
+          lastAutoReplyAt: null,
+          comboImageSentAt: null,
+          comboVideoSentAt: null,
+          followUpSentAt: null,
+        }
+      : { botPaused },
+  });
+}
+
+export async function deleteAllWatiConversations() {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+
+  return prisma.$transaction(async (tx) => {
+    const deletedMessages = await tx.watiMessage.deleteMany({});
+    const deletedConversations = await tx.watiConversation.deleteMany({});
+    return {
+      messages: deletedMessages.count,
+      conversations: deletedConversations.count,
+    };
+  });
+}
+
+/** Marca el chat como leído; devuelve true si había mensajes del cliente sin leer. */
+export async function markWatiConversationRead(conversationId: string) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  // SQL directo para no reescribir updatedAt. Solo actualiza si hay algo sin leer.
+  const updated = await prisma.$executeRaw`
+    UPDATE "WatiConversation" c SET "lastReadAt" = ${new Date()}
+    WHERE c.id = ${conversationId} AND EXISTS (
+      SELECT 1 FROM "WatiMessage" m
+      WHERE m."conversationId" = c.id AND m.role = 'USER'
+        AND (c."lastReadAt" IS NULL OR m."createdAt" > c."lastReadAt")
+    )`;
+  return updated > 0;
+}
+
+// ponytail: throttle en memoria por instancia; pasar a webhook sessionMessageSent si hace falta tiempo real.
+const advisorSyncAt = new Map<string, number>();
+const ADVISOR_SYNC_EVERY_MS = 30_000;
+
+/**
+ * Trae de WATI lo que un asesor escribió directo allá (no pasa por nuestro webhook).
+ * Lo enviado por API (bot y panel) sale con operador "API Token …" y ya está guardado.
+ */
+export async function syncAdvisorMessagesFromWati(conversationId: string) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  if (Date.now() - (advisorSyncAt.get(conversationId) ?? 0) < ADVISOR_SYNC_EVERY_MS) return 0;
+  advisorSyncAt.set(conversationId, Date.now());
+
+  const conversation = await prisma.watiConversation.findUnique({
+    where: { id: conversationId },
+    select: { phone: true },
+  });
+  if (!conversation) return 0;
+
+  const data = (await getWatiMessages(conversation.phone)).flatMap((message) => {
+    const operator = message.operator_name?.trim();
+    const createdAt = message.created ? new Date(message.created) : null;
+    if (message.owner !== true || !message.id || !operator || /^api token/i.test(operator)) return [];
+    if (!createdAt || Number.isNaN(createdAt.getTime())) return [];
+    const isText = !message.type || message.type === "text";
+    const text = message.text?.trim();
+    if (isText && !text) return [];
+    return [{
+      externalId: message.id,
+      conversationId,
+      role: "AGENT" as const,
+      content: isText ? text! : text ? `📎 (${message.type}) ${text}` : `📎 (${message.type} enviado)`,
+      createdAt,
+    }];
+  });
+  if (data.length === 0) return 0;
+  const result = await prisma.watiMessage.createMany({ data, skipDuplicates: true });
+  return result.count;
+}
+
+export async function getWatiConversationMessages(conversationId: string) {  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+
+  const conversation = await prisma.watiConversation.findUnique({
+    where: { id: conversationId },
+    include: {
+      messages: { orderBy: { createdAt: "asc" } },
+    },
+  });
+
+  if (!conversation) throw new Error("CONVERSATION_NOT_FOUND");
+
+  return conversation;
+}
+
+export async function sendAgentReply(conversationId: string, text: string, senderId: string, replyToId?: string | null) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+
+  const conversation = await prisma.watiConversation.findUnique({ where: { id: conversationId } });
+  if (!conversation) throw new Error("CONVERSATION_NOT_FOUND");
+
+  // Solo se puede citar un mensaje de esta conversación que tenga id de WATI.
+  const quoted = replyToId
+    ? await prisma.watiMessage.findFirst({ where: { id: replyToId, conversationId }, select: { id: true, externalId: true } })
+    : null;
+
+  await sendWatiMessage(conversation.phone, text, quoted?.externalId);
+
+  const message = await prisma.watiMessage.create({
+    data: { conversationId, role: "AGENT", content: text, senderId, replyToId: quoted?.id ?? null },
+  });
+
+  await prisma.watiConversation.update({
+    where: { id: conversationId },
+    data: { updatedAt: new Date() },
+  });
+
+  return message;
+}
+
+export type StartWatiConversationInput =
+  | { mode: "session"; phone: string; text: string }
+  | {
+      mode: "template";
+      phone: string;
+      templateName: string;
+      parameters: Array<{ name: string; value: string }>;
+    };
+
+export async function startWatiConversation(input: StartWatiConversationInput, senderId: string) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+
+  const phone = normalizeWhatsappPhone(input.phone);
+  let storedContent: string;
+
+  if (input.mode === "session") {
+    const text = input.text.trim();
+    if (!text) throw new Error("EMPTY_MESSAGE");
+    await sendWatiMessage(phone, text);
+    storedContent = text;
+  } else {
+    const templates = await getWatiTemplates();
+    const template = templates.find((item) => item.name === input.templateName);
+    if (!template) throw new Error("TEMPLATE_NOT_FOUND");
+
+    const values = new Map(input.parameters.map((parameter) => [parameter.name, parameter.value.trim()]));
+    const missingParameter = template.parameters.find((parameter) => !values.get(parameter.name));
+    if (missingParameter) throw new Error(`TEMPLATE_PARAMETER_REQUIRED:${missingParameter.name}`);
+
+    const parameters = template.parameters.map((parameter) => ({
+      name: parameter.name,
+      value: values.get(parameter.name)!,
+    }));
+    await sendWatiTemplateMessage(phone, template.name, parameters);
+    storedContent = `Plantilla: ${template.name}\n${renderTemplate(template.bodyOriginal, parameters)}`;
+  }
+
+  const existingConversation = await prisma.watiConversation.findUnique({
+    where: { phone },
+    select: { id: true, orderId: true, salesStage: true },
+  });
+  const startsNewSale = Boolean(
+    existingConversation?.orderId || existingConversation?.salesStage === "SOLD",
+  );
+  const conversation = existingConversation
+    ? await prisma.watiConversation.update({
+        where: { id: existingConversation.id },
+        data: startsNewSale
+          ? {
+              status: "ACTIVE",
+              salesStage: "NEW",
+              botPaused: false,
+              orderId: null,
+              aiContextStartedAt: new Date(),
+              memorySummary: null,
+              memorySummaryThrough: null,
+              lastAutoReplyAt: null,
+              comboImageSentAt: null,
+              comboVideoSentAt: null,
+              followUpSentAt: null,
+              archivedAt: null,
+            }
+          : { status: "ACTIVE", updatedAt: new Date(), archivedAt: null },
+      })
+    : await prisma.watiConversation.create({
+        data: { phone, assignedSellerId: await pickSellerForNewConversation() },
+      });
+
+  await prisma.watiMessage.create({
+    data: { conversationId: conversation.id, role: "AGENT", content: storedContent, senderId },
+  });
+
+  await prisma.watiConversation.update({
+    where: { id: conversation.id },
+    data: { updatedAt: new Date(), archivedAt: null },
+  });
+
+  return getWatiConversationMessages(conversation.id);
+}
+
+export type BulkConversationAction = "archive" | "unarchive" | "delete";
+
+/** Archiva, desarchiva o elimina varias conversaciones; los mensajes se borran en cascada. */
+export async function bulkUpdateWatiConversations(ids: string[], action: BulkConversationAction) {
+  if (!prisma) throw new Error("DATABASE_NOT_CONFIGURED");
+  const where = { id: { in: ids } };
+  if (action === "delete") {
+    const result = await prisma.watiConversation.deleteMany({ where });
+    return result.count;
+  }
+  // updatedAt se conserva: archivar no debe subir el chat en el orden de la bandeja.
+  const result = await prisma.$executeRaw`UPDATE "WatiConversation" SET "archivedAt" = ${action === "archive" ? new Date() : null} WHERE id = ANY(${ids})`;
+  return result;
+}

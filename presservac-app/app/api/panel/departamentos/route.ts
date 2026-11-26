@@ -1,0 +1,151 @@
+import { requirePermission } from "@/lib/permissions";
+import { prisma } from "@/lib/prisma";
+import { DOC_DEPARTMENTS, PRODUCTION_AREAS, getDocDepartment } from "@/lib/production-departments";
+import { broadcastPanelUpdate } from "@/lib/realtime";
+
+const OTHER_AREA = {
+  key: "OTROS",
+  name: "Otras áreas",
+  description: "Departamentos sin área asignada.",
+};
+
+export async function GET() {
+  const access = await requirePermission("MODULE_PRODUCCION", "view");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  if (!prisma) return Response.json({ areas: [], stats: { areas: 0, units: 0, responsables: 0, activeAccounts: 0 } });
+
+  const departments = await prisma.productionDepartment.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      members: {
+        orderBy: { order: "asc" },
+        include: {
+          user: { select: { id: true, fullName: true, email: true, role: true, status: true, avatarUrl: true } },
+        },
+      },
+    },
+  });
+
+  const registeredCodes = new Set(departments.map((d) => d.code));
+  const missingDoc = DOC_DEPARTMENTS.filter((d) => !registeredCodes.has(d.code));
+
+  const mapped = [
+    ...departments.map((d) => {
+      const doc = getDocDepartment(d.code) ?? DOC_DEPARTMENTS.find((x) => x.name === d.name);
+      const members = d.members.map((m) => {
+        const account = m.user;
+        return {
+          memberId: m.id,
+          userId: m.userId ?? null,
+          name: account?.fullName ?? m.name ?? m.email ?? "—",
+          title: m.title,
+          kind: m.kind === "BACKUP" ? ("backup" as const) : ("holder" as const),
+          email: account?.email ?? m.email ?? "",
+          account: account
+            ? {
+                id: account.id,
+                fullName: account.fullName,
+                role: account.role,
+                status: account.status,
+                avatarUrl: account.avatarUrl,
+              }
+            : null,
+        };
+      });
+      const backup = members.find((m) => m.kind === "backup");
+      return {
+        id: d.id,
+        name: d.name,
+        code: d.code,
+        description: d.description,
+        area: d.area ?? doc?.area ?? null,
+        isActive: d.isActive,
+        members,
+        backupName: backup?.name ?? null,
+      };
+    }),
+    ...missingDoc.map((d) => ({
+      id: "",
+      name: d.name,
+      code: d.code,
+      description: d.description,
+      area: d.area,
+      isActive: true,
+      members: [] as {
+        memberId: string | null;
+        userId: string | null;
+        name: string;
+        title: string;
+        kind: "holder" | "backup";
+        email: string;
+        account: { id: string; fullName: string; role: string; status: string; avatarUrl: string | null } | null;
+      }[],
+      backupName: null as string | null,
+    })),
+  ];
+
+  const knownKeys = new Set(PRODUCTION_AREAS.map((a) => a.key));
+  const areas = PRODUCTION_AREAS.map((a) => ({
+    ...a,
+    departments: mapped.filter((d) => d.area === a.key),
+  }));
+
+  const orphans = mapped.filter((d) => !d.area || !knownKeys.has(d.area));
+  if (orphans.length) areas.push({ ...OTHER_AREA, departments: orphans });
+
+  const activeIds = new Set<string>();
+  const responsableIds = new Set<string>();
+  mapped.forEach((d) =>
+    d.members.forEach((m) => {
+      if (m.kind === "holder" && m.account) responsableIds.add(m.account.id);
+      if (!m.account) return;
+      if (m.account.status === "ACTIVE") activeIds.add(m.account.id);
+    }),
+  );
+
+  const areasCount = new Set(mapped.map((d) => d.area).filter(Boolean)).size;
+
+  return Response.json({
+    areas,
+    stats: {
+      areas: areasCount,
+      units: mapped.length,
+      responsables: responsableIds.size,
+      activeAccounts: activeIds.size,
+    },
+  });
+}
+
+export async function POST(request: Request) {
+  const access = await requirePermission("MODULE_PRODUCCION", "create");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  if (!prisma) return Response.json({ error: "Base de datos no disponible" }, { status: 503 });
+
+  const { name, code, description, area } = (await request.json()) as {
+    name?: string;
+    code?: string;
+    description?: string;
+    area?: string;
+  };
+
+  if (!name?.trim() || !code?.trim()) {
+    return Response.json({ error: "Nombre y código son obligatorios" }, { status: 400 });
+  }
+
+  const exists = await prisma.productionDepartment.findFirst({
+    where: { OR: [{ name: name.trim() }, { code: code.trim().toUpperCase() }] },
+  });
+  if (exists) return Response.json({ error: "Ya existe un departamento con ese nombre o código" }, { status: 409 });
+
+  const department = await prisma.productionDepartment.create({
+    data: {
+      name: name.trim(),
+      code: code.trim().toUpperCase(),
+      description: description?.trim() || null,
+      area: area?.trim() || null,
+    },
+  });
+
+  broadcastPanelUpdate("production").catch(() => {});
+  return Response.json(department, { status: 201 });
+}

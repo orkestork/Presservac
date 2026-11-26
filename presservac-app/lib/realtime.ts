@@ -1,0 +1,40 @@
+import { supabaseDb } from "@/lib/supabase-db";
+
+export type RealtimeResource =
+  | "users"
+  | "fulfillment"
+  | "payments"
+  | "plant"
+  | "design"
+  | "permissions"
+  | "combos"
+  | "products"
+  | "orders"
+  | "timeoff"
+  | "tickets"
+  | "wati"
+  | "notifications"
+  | "payslips"
+  | "campaigns"
+  | "quotations"
+  | "warehouse"
+  | "production"
+  | "logistics"
+  | "maintenance"
+  | "assembly"
+  | "production-control"
+  | "rrhh"
+  | "planner"
+  | "audit";
+
+/** Notifica a los clientes suscritos al canal "panel-updates" que un recurso cambió. */
+export async function broadcastPanelUpdate(resource: RealtimeResource) {
+  if (!supabaseDb) return;
+  const channel = supabaseDb.channel("panel-updates");
+  await channel.send({
+    type: "broadcast",
+    event: "changed",
+    payload: { resource },
+  });
+  await supabaseDb.removeChannel(channel);
+}

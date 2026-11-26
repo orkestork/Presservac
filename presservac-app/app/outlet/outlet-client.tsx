@@ -1,0 +1,441 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { useCart } from "../components/cart-provider";
+import { useSaleMode } from "../components/sale-mode-provider";
+import WhatsAppBuyCTA, { WHATSAPP_ICON } from "../components/whatsapp-buy-cta";
+import type { ProductoCatalogo } from "../data/catalog";
+import SiteFooter from "../components/site-footer";
+
+function isOutletProduct(product: ProductoCatalogo) {
+  if (product.esOutlet !== true) return false;
+  if (product.outletExpiraEl && new Date(product.outletExpiraEl) < new Date()) return false;
+  return true;
+}
+
+function hasVisibleDiscount(product: ProductoCatalogo) {
+  return Boolean(product.descuento && product.descuento !== "-0%");
+}
+
+function outletDaysLeft(product: ProductoCatalogo): number | null {
+  if (!product.outletExpiraEl) return null;
+  const ms = new Date(product.outletExpiraEl).getTime() - Date.now();
+  return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
+}
+
+const OUTLET_RING_RADIUS = 22;
+const OUTLET_RING_CIRCUMFERENCE = 2 * Math.PI * OUTLET_RING_RADIUS;
+const OUTLET_COUNTDOWN_TOTAL_DAYS = 15;
+
+function outletRingColor(days: number) {
+  if (days <= 2) return "#DC2626";
+  if (days <= 6) return "#F59E0B";
+  return "#D60517";
+}
+
+function OutletCountdownBadge({ product }: { product: ProductoCatalogo }) {
+  const days = outletDaysLeft(product);
+  if (days === null) return null;
+  const frac = Math.min(1, Math.max(0, days / OUTLET_COUNTDOWN_TOTAL_DAYS));
+  const offset = OUTLET_RING_CIRCUMFERENCE * (1 - frac);
+  const color = outletRingColor(days);
+  return (
+    <div
+      className="absolute right-4 top-4 z-10 flex h-[52px] w-[52px] items-center justify-center rounded-full"
+      style={{ background: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.25)" }}
+    >
+      <svg width="52" height="52" viewBox="0 0 52 52" className="absolute" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="26" cy="26" r={OUTLET_RING_RADIUS} fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="4" />
+        <circle
+          cx="26" cy="26" r={OUTLET_RING_RADIUS} fill="none" stroke={color} strokeWidth="4" strokeLinecap="round"
+          strokeDasharray={OUTLET_RING_CIRCUMFERENCE} strokeDashoffset={offset}
+          style={{ transition: "stroke-dashoffset 0.4s ease, stroke 0.4s ease" }}
+        />
+      </svg>
+      <div className="flex flex-col items-center leading-none">
+        <span className="text-[15px] font-extrabold text-white">{days}</span>
+        <span className="text-[8px] font-bold uppercase text-white/70">{days === 1 ? "día" : "días"}</span>
+      </div>
+    </div>
+  );
+}
+
+function AddOutletButton({ product, featured = false }: { product: ProductoCatalogo; featured?: boolean }) {
+  const { addItem } = useCart();
+  const saleMode = useSaleMode();
+  const [added, setAdded] = useState(false);
+
+  if (saleMode === "whatsapp") {
+    if (product.puedeComprar === false) {
+      return (
+        <span className={`inline-flex items-center justify-center rounded-full bg-slate-600 font-bold text-slate-400 ${featured ? "min-h-10 w-full px-5 py-2.5 text-sm" : "mt-3 min-h-10 w-full px-4 py-2.5 text-sm"}`}>
+          Sin stock
+        </span>
+      );
+    }
+    return (
+      <WhatsAppBuyCTA
+        nombre={product.nombre}
+        className={`shine-sweep inline-flex items-center justify-center gap-1.5 rounded-full bg-[#25D366] font-bold text-white transition-all duration-200 hover:bg-[#128C7E] ${
+          featured ? "min-h-10 w-full px-5 py-2.5 text-sm" : "mt-3 min-h-10 w-full px-4 py-2.5 text-sm"
+        }`}
+      >
+        {WHATSAPP_ICON}
+        WhatsApp
+      </WhatsAppBuyCTA>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      disabled={product.puedeComprar === false}
+      onClick={() => {
+        if (product.puedeComprar === false) return;
+        addItem({
+          id: product.slug,
+          nombre: product.nombre,
+          precio: product.precio,
+          imagen: product.imagen,
+        });
+        setAdded(true);
+        window.setTimeout(() => setAdded(false), 1200);
+      }}
+      style={product.puedeComprar === false ? undefined : { background: "linear-gradient(135deg, #3b82f6, #7c3aed, #d946ef)" }}
+      className={`shine-sweep inline-flex items-center justify-center rounded-full font-bold text-white transition-all duration-200 disabled:cursor-not-allowed disabled:bg-slate-600 disabled:text-slate-400 ${
+        featured
+          ? "min-h-10 w-full px-5 py-2.5 text-sm shadow-[0_8px_28px_rgba(124,58,237,0.5)] hover:-translate-y-0.5 hover:opacity-90"
+          : "mt-3 min-h-10 w-full px-4 py-2.5 text-sm hover:opacity-90"
+      }`}
+    >
+      {product.puedeComprar === false ? "Sin stock" : added ? "¡Agregado!" : "Agregar al carrito"}
+    </button>
+  );
+}
+
+function ProductImage({ product, maxHeight }: { product: ProductoCatalogo; maxHeight?: number }) {
+  const [src, setSrc] = useState(product.imagen);
+
+  useEffect(() => {
+    setSrc(product.imagen);
+  }, [product.imagen]);
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={product.nombre}
+      className="w-auto max-w-full object-contain"
+      style={maxHeight ? { maxHeight } : undefined}
+      onError={() => setSrc("/product-placeholder.png")}
+    />
+  );
+}
+
+function ProductCard({ product }: { product: ProductoCatalogo }) {
+  const showDiscount = hasVisibleDiscount(product);
+
+  return (
+    <article
+      className="motion-card interactive-lift group flex min-h-[340px] flex-col overflow-hidden rounded-2xl shadow-[0_8px_28px_rgba(0,0,0,0.3)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_16px_40px_rgba(124,58,237,0.35)]"
+      style={{ background: "linear-gradient(160deg, #0f0c2e 0%, #1a1060 60%, #2d1080 100%)" }}
+    >
+      <Link href={`/producto/${product.slug}`} className="relative flex h-[220px] items-center justify-center bg-white px-6">
+        {showDiscount ? (
+          <span
+            className="absolute left-4 top-4 z-10 rounded-lg px-3 py-1.5 text-xs font-black text-white"
+            style={{ background: "linear-gradient(135deg, #3b82f6, #7c3aed)" }}
+          >
+            ★ OFERTA DESTACADA
+          </span>
+        ) : null}
+        <OutletCountdownBadge product={product} />
+        <div className="outlet-product-pop">
+          <ProductImage product={product} maxHeight={170} />
+        </div>
+      </Link>
+
+      <div className="flex flex-1 flex-col p-5">
+        <Link href={`/producto/${product.slug}`}>
+          <h3 className="text-base font-semibold leading-snug text-white/85 hover:text-white">{product.nombre}</h3>
+        </Link>
+        <div className="mt-auto flex flex-wrap items-end gap-3 pt-4">
+          {showDiscount && (
+            <span
+              className="rounded-lg px-2.5 py-1 text-xs font-black text-white"
+              style={{ background: "linear-gradient(135deg, #3b82f6, #7c3aed)" }}
+            >
+              {product.descuento}
+            </span>
+          )}
+          {product.precioAnterior ? (
+            <p className="text-sm font-medium text-white/40 line-through">{product.precioAnterior}</p>
+          ) : null}
+          <p className="w-full text-[32px] font-black leading-none tracking-tight text-white">{product.precio}</p>
+        </div>
+        <AddOutletButton product={product} />
+      </div>
+    </article>
+  );
+}
+
+function FeaturedCarousel({ products }: { products: ProductoCatalogo[] }) {
+  const [index, setIndex] = useState(0);
+  const product = products[index];
+
+  useEffect(() => {
+    if (products.length <= 1) return;
+    const timer = window.setInterval(() => {
+      setIndex((i) => (i + 1) % products.length);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [products.length]);
+
+  if (!product) return null;
+  const showDiscount = hasVisibleDiscount(product);
+
+  const prev = () => setIndex((i) => (i - 1 + products.length) % products.length);
+  const next = () => setIndex((i) => (i + 1) % products.length);
+
+  return (
+    <article
+      className="outlet-featured-shell flex aspect-square flex-col overflow-hidden rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.45)]"
+      style={{ background: "linear-gradient(160deg, #0f0c2e 0%, #1a1060 60%, #2d1080 100%)" }}
+    >
+      {/* Imagen con flechas */}
+      <div className="relative flex h-[58%] min-h-0 w-full items-center justify-center bg-white p-5">
+        {showDiscount && (
+          <span
+            className="outlet-badge-pop absolute left-3 top-3 rounded-lg px-2.5 py-1 text-xs font-black text-white shadow-lg"
+            style={{ background: "linear-gradient(135deg, #3b82f6, #7c3aed)" }}
+          >
+            {product.descuento}
+          </span>
+        )}
+        <OutletCountdownBadge product={product} />
+        <Link href={`/producto/${product.slug}`} className="outlet-product-pop">
+          <ProductImage product={product} maxHeight={260} />
+        </Link>
+
+        {/* Flecha izquierda */}
+        <button
+          type="button"
+          onClick={prev}
+          className="nav-pulse absolute left-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+          style={{ border: "1px solid rgba(124,58,237,0.2)" }}
+          aria-label="Anterior"
+        >
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="#7c3aed" strokeWidth="2.5">
+            <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+
+        {/* Flecha derecha */}
+        <button
+          type="button"
+          onClick={next}
+          className="nav-pulse absolute right-4 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+          style={{ border: "1px solid rgba(124,58,237,0.2)" }}
+          aria-label="Siguiente"
+        >
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="#7c3aed" strokeWidth="2.5">
+            <path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Info */}
+      <div className="flex min-h-0 flex-1 flex-col px-6 pb-5 pt-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div
+            className="inline-flex min-w-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-white"
+            style={{ background: "rgba(99,102,241,0.35)", border: "1px solid rgba(139,92,246,0.4)" }}
+          >
+            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-[#c084fc]">
+              <path d="M8 1.5l1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 9.5l-3.2 1.9.6-3.6-2.6-2.5 3.6-.5z" />
+            </svg>
+            Oferta destacada
+          </div>
+          {/* Dots */}
+          <div className="flex gap-1.5">
+            {products.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setIndex(i)}
+                className={`h-2 rounded-full transition-all ${i === index ? "pulse-ring" : ""}`}
+                style={{
+                  width: i === index ? "20px" : "8px",
+                  background: i === index ? "#c084fc" : "rgba(255,255,255,0.25)",
+                }}
+                aria-label={`Producto ${i + 1}`}
+              />
+            ))}
+          </div>
+        </div>
+
+        <Link href={`/producto/${product.slug}`}>
+          <h2 className="line-clamp-2 text-lg font-semibold leading-snug text-white/90 hover:text-white">
+            {product.nombre}
+          </h2>
+        </Link>
+
+        <div className="mt-auto flex items-end gap-2 pt-3">
+          <p className="text-3xl font-black leading-none tracking-tight text-white">
+            {product.precio}
+          </p>
+          {product.precioAnterior && (
+            <p className="pb-0.5 text-sm font-medium text-white/40 line-through">
+              {product.precioAnterior}
+            </p>
+          )}
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <AddOutletButton product={product} featured />
+          <Link
+            href="#ofertas"
+            className="inline-flex shrink-0 items-center justify-center rounded-full px-4 py-2.5 text-xs font-semibold text-white/80 transition-colors hover:text-white"
+            style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)" }}
+          >
+            Ver todas
+          </Link>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export default function OutletClient({ products, heroDesktop, heroMobile, superOfertas }: { products: ProductoCatalogo[]; heroDesktop: string; heroMobile: string; superOfertas: string }) {
+  const outletCatalog = useMemo(
+    () => products.filter(isOutletProduct),
+    [products],
+  );
+  const outletProducts = outletCatalog;
+  const carouselProducts = useMemo(
+    () => outletCatalog.slice(0, 8),
+    [outletCatalog],
+  );
+
+  return (
+    <>
+      <main className="min-h-screen bg-[#f4f6f8]">
+        {/* Hero banner */}
+        <section className="outlet-sparkle-layer relative isolate overflow-hidden bg-[#0a0630]">
+          {/* Imagen a ancho completo, proporciones naturales */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <picture>
+            <source media="(max-width: 639px)" srcSet={heroMobile} />
+            <img
+              src={heroDesktop}
+              alt=""
+              aria-hidden="true"
+              className="outlet-hero-bg block w-full"
+            />
+          </picture>
+
+          {/* Carrusel encima en desktop */}
+          {carouselProducts.length > 0 && (
+            <div
+              className="absolute hidden lg:block"
+              style={{
+                right: "calc(4% + 40px)",
+                top: "46%",
+                transform: "translateY(-50%)",
+                width: "clamp(440px, 32vw, 560px)",
+              }}
+            >
+              <div className="outlet-featured-card-mobile">
+                <FeaturedCarousel products={carouselProducts} />
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Carrusel en móvil/tablet — debajo del banner */}
+        {carouselProducts.length > 0 && (
+          <div className="outlet-featured-card-mobile block px-4 py-6 sm:px-6 lg:hidden" style={{ background: "linear-gradient(180deg, #08052a 0%, #100840 100%)" }}>
+            <FeaturedCarousel products={carouselProducts} />
+          </div>
+        )}
+
+
+        {/* Products grid */}
+        <section id="ofertas" className="px-5 py-10 lg:px-10" style={{ background: "linear-gradient(180deg, #08052a 0%, #100840 100%)" }}>
+          <div className="mx-auto max-w-[1536px]">
+            <div className="mb-7 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.26em] text-[#c084fc]">
+                  Outlet virtual
+                </p>
+                <h2 className="mt-1.5 text-3xl font-bold tracking-tight text-white md:text-4xl">
+                  Super ofertas Presservac
+                </h2>
+              </div>
+              <Link
+                href="/categorias"
+                className="inline-flex w-fit rounded-full px-6 py-2.5 text-sm font-semibold text-white transition-colors duration-200 hover:opacity-80"
+                style={{ background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.15)" }}
+              >
+                Ver catálogo completo
+              </Link>
+            </div>
+
+            {outletCatalog.length > 0 ? (
+              <div className="motion-list grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {outletProducts.map((product) => (
+                  <ProductCard key={product.slug} product={product} />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-white/10 bg-white/8 px-6 py-10 text-center text-white">
+                <p className="text-lg font-bold">Aún no hay productos en Outlet.</p>
+                <p className="mt-2 text-sm text-white/70">
+                  Crea productos desde el administrador usando el botón Crear Outlet.
+                </p>
+              </div>
+            )}
+
+            <aside className="outlet-sparkle-layer interactive-lift relative mt-4 overflow-hidden rounded-2xl">
+              <div className="relative aspect-[4/3] sm:aspect-[16/6] lg:aspect-[16/4]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={superOfertas}
+                  alt="Super Ofertas Presservac - Outlet Virtual"
+                  className="outlet-hero-bg absolute inset-0 h-full w-full object-cover object-center"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent sm:bg-gradient-to-r sm:from-transparent sm:via-black/20 sm:to-black/85" />
+                <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 px-5 pb-5 sm:inset-y-0 sm:bottom-auto sm:left-[38%] sm:right-0 sm:justify-center sm:gap-3 sm:px-8 sm:pb-0 sm:pt-16">
+                  <span className="inline-flex w-fit items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest text-white sm:text-xs" style={{ background: "rgba(192,64,255,0.35)", border: "1px solid rgba(192,64,255,0.5)" }}>
+                    ⏳ Solo 15 días
+                  </span>
+                  <p className="text-2xl font-black leading-tight text-white drop-shadow-lg sm:text-[clamp(1.5rem,3.5vw,3.2rem)]">
+                    <span className="outlet-banner-title">¡Descuentos de hasta</span>{" "}
+                    <span style={{ background: "linear-gradient(90deg,#c084fc,#60a5fa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+                      70% OFF
+                    </span>
+                    !
+                  </p>
+                  <p className="text-sm leading-relaxed text-white/85 drop-shadow sm:max-w-[380px] sm:text-[clamp(0.85rem,1.4vw,1.15rem)]">
+                    Estas ofertas desaparecen en 15 días. No dejes ir los mejores precios del año.
+                  </p>
+                  <Link
+                    href="#ofertas"
+                    className="inline-flex w-fit rounded-full px-5 py-2 text-sm font-black text-white shadow-lg transition-all duration-200 hover:scale-105 sm:px-6 sm:py-2.5"
+                    style={{ background: "linear-gradient(135deg, #7c3aed, #3b82f6)" }}
+                  >
+                    Ver ofertas ahora →
+                  </Link>
+                </div>
+              </div>
+            </aside>
+
+          </div>
+        </section>
+      </main>
+
+      <SiteFooter />
+    </>
+  );
+}

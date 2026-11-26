@@ -1,0 +1,78 @@
+import { requireAnyPermission, requirePermission } from "@/lib/permissions";
+import { getProductsForPanel, setProductActive, updateProductPrice, updateProductPackPrices } from "@/lib/panel";
+import { prisma } from "@/lib/prisma";
+import { broadcastPanelUpdate } from "@/lib/realtime";
+import { apiHandler } from "@/lib/api-handler";
+import { logAudit } from "@/lib/audit";
+import { getClientIp } from "@/lib/rate-limit";
+
+export const GET = apiHandler(async (request: Request) => {
+  // El panel de Outlet y el formulario de Producción se alimentan de esta misma
+  // lista, así que basta con poder ver cualquiera de esos módulos.
+  const access = await requireAnyPermission([
+    { module: "MODULE_PRODUCTOS", action: "view" },
+    { module: "MODULE_OUTLET", action: "view" },
+    { module: "MODULE_PRODUCCION", action: "view" },
+  ]);
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  const { searchParams } = new URL(request.url);
+  const minimal = searchParams.get("minimal") === "1";
+  if (minimal) {
+    if (!prisma) return Response.json([]);
+    const products = await prisma.product.findMany({
+      where: { active: true },
+      select: {
+        id: true, name: true, price: true, image: true, sku: true,
+        packPrices: { select: { label: true, qty: true, totalPrice: true }, orderBy: { order: "asc" } },
+      },
+      orderBy: { name: "asc" },
+    });
+    return Response.json(products);
+  }
+  const products = await getProductsForPanel();
+  return Response.json(products);
+});
+
+export const PATCH = apiHandler(async (request: Request) => {
+  const access = await requirePermission("MODULE_PRODUCTOS", "edit");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  const { session } = access;
+  const body = await request.json() as {
+    productId: string;
+    newPrice?: number;
+    note?: string;
+    packPrices?: { label: string; qty: number; totalPrice: number }[];
+    active?: boolean;
+  };
+  if (!body.productId) {
+    return Response.json({ error: "Faltan datos" }, { status: 400 });
+  }
+  if (typeof body.active === "boolean") {
+    await setProductActive(body.productId, body.active);
+  }
+  if (body.newPrice) {
+    await updateProductPrice(body.productId, body.newPrice, session.userId, body.note);
+  }
+  if (body.packPrices) {
+    const cleaned = body.packPrices
+      .filter((p) => p.label.trim() && p.qty > 0 && p.totalPrice > 0)
+      .map((p) => ({ label: p.label.trim(), qty: Math.round(p.qty), totalPrice: Math.round(p.totalPrice) }));
+    await updateProductPackPrices(body.productId, cleaned);
+  }
+  await logAudit({
+    actorId: access.user.id,
+    actorEmail: access.user.email,
+    action: "product.panel_update",
+    entity: "product",
+    entityId: body.productId,
+    meta: {
+      newPrice: body.newPrice,
+      active: body.active,
+      packPrices: body.packPrices ? body.packPrices.length : undefined,
+      note: body.note,
+    },
+    ip: getClientIp(request),
+  });
+  await broadcastPanelUpdate("products");
+  return Response.json({ ok: true });
+});

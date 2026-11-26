@@ -1,0 +1,2556 @@
+"use client";
+
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  MdAdd,
+  MdArrowBack,
+  MdAutorenew,
+  MdCheckCircle,
+  MdClose,
+  MdDeleteOutline,
+  MdErrorOutline,
+  MdExpandMore,
+  MdFilterList,
+  MdPsychology,
+  MdHeadsetMic,
+  MdLockClock,
+  MdDone,
+  MdDoneAll,
+  MdMoreVert,
+  MdReply,
+  MdAttachFile,
+  MdOutlineEmojiEmotions,
+  MdInsertDriveFile,
+  MdImage,
+  MdChecklist,
+  MdMoreHoriz,
+  MdCheckBox,
+  MdCheckBoxOutlineBlank,
+  MdOutlineAssignment,
+  MdOutlineDescription,
+  MdPerson,
+  MdSearch,
+  MdSend,
+  MdArchive,
+  MdSmartToy,
+  MdSupportAgent,
+  MdUnarchive,
+  MdWhatsapp,
+  MdNotificationsActive,
+} from "react-icons/md";
+import { useConfirm } from "@/app/components/confirm-dialog";
+import Link from "next/link";
+import { useRealtimeRefresh } from "@/lib/hooks/use-realtime-refresh";
+
+type ConversationSummary = {
+  id: string;
+  phone: string;
+  contactName: string | null;
+  status: "ACTIVE" | "CLOSED";
+  salesStage: "NEW" | "IN_PROGRESS" | "FOLLOW_UP" | "SOLD";
+  notes: string | null;
+  botPaused: boolean;
+  orderId: string | null;
+  orderChannel: "ONLINE" | "WHATSAPP" | "MARKETPLACE" | "OTHER" | null;
+  assignedSellerId: string | null;
+  assignedSellerName: string | null;
+  odooOrderId: number | null;
+  odooOrderName: string | null;
+  odooSyncStatus: "NOT_SYNCED" | "SYNCED" | "FAILED";
+  odooSyncError: string | null;
+  orderSubtotal: number | null;
+  orderTotalItems: number | null;
+  orderItems: { name: string; quantity: number; lineTotal: number; image: string }[];
+  followUpSentAt: string | null;
+  updatedAt: string;
+  lastMessage: { content: string; role: "USER" | "ASSISTANT" | "AGENT"; createdAt: string } | null;
+  unreadCount: number;
+};
+
+type ConversationFilter = "ALL" | "HELP" | "NEW" | "ACTIVE" | "SOLD" | "CLOSED";
+type ConversationDateFilter = "ALL" | "TODAY" | "7D" | "30D";
+type SalesStage = "NEW" | "IN_PROGRESS" | "FOLLOW_UP" | "SOLD";
+type ConversationTab = "CHAT" | "INFORMATION" | "HISTORY" | "NOTES" | "FILES";
+
+const CONVERSATION_FILTERS: Array<{ value: ConversationFilter; label: string }> = [
+  { value: "ALL", label: "Todos" },
+  { value: "HELP", label: "Ayuda" },
+  { value: "NEW", label: "Nuevos" },
+  { value: "ACTIVE", label: "En conversación" },
+  { value: "SOLD", label: "Vendidos" },
+  { value: "CLOSED", label: "Cerradas" },
+];
+
+const FILTER_HEADER_CLASSES: Record<ConversationFilter, string> = {
+  ALL: "from-[#075E54] via-[#0B2E6B] to-[#35B8BE]",
+  HELP: "from-[#991B1B] via-[#DC2626] to-[#F87171]",
+  NEW: "from-[#5B21B6] via-[#7C3AED] to-[#A78BFA]",
+  ACTIVE: "from-[#1E40AF] via-[#2563EB] to-[#60A5FA]",
+  SOLD: "from-[#14532D] via-[#16A34A] to-[#4ADE80]",
+  CLOSED: "from-[#334155] via-[#475569] to-[#64748B]",
+};
+
+const ARCHIVED_HEADER_CLASS = "from-[#78350F] via-[#B45309] to-[#F59E0B]";
+const ARCHIVED_BUTTON_CLASS = "bg-[#78350F] text-white ring-[#FDE68A]";
+
+const FILTER_ACTIVE_BUTTON_CLASSES: Record<ConversationFilter, string> = {
+  ALL: "bg-white text-[#0B2E6B] ring-white",
+  HELP: "bg-[#7F1D1D] text-white ring-[#FECACA]",
+  NEW: "bg-[#4C1D95] text-white ring-[#C4B5FD]",
+  ACTIVE: "bg-[#1E3A8A] text-white ring-[#BFDBFE]",
+  SOLD: "bg-[#14532D] text-white ring-[#BBF7D0]",
+  CLOSED: "bg-[#1E293B] text-white ring-[#CBD5E1]",
+};
+
+const SALES_STAGE_META: Record<SalesStage, { label: string; className: string; rowClassName: string; stripeClassName: string }> = {
+  NEW: { label: "Nuevo", className: "bg-[#EDE9FE] text-[#6D28D9]", rowClassName: "bg-[#FAF8FF] hover:bg-[#F4F0FF]", stripeClassName: "border-l-[#8B5CF6]" },
+  IN_PROGRESS: { label: "En conversación", className: "bg-[#DBEAFE] text-[#1D4ED8]", rowClassName: "bg-[#F5FAFF] hover:bg-[#EFF6FF]", stripeClassName: "border-l-[#3B82F6]" },
+  FOLLOW_UP: { label: "En conversación", className: "bg-[#DBEAFE] text-[#1D4ED8]", rowClassName: "bg-[#F5FAFF] hover:bg-[#EFF6FF]", stripeClassName: "border-l-[#3B82F6]" },
+  SOLD: { label: "Vendido", className: "bg-[#DCFCE7] text-[#15803D]", rowClassName: "bg-[#F0FDF4] hover:bg-[#DCFCE7]", stripeClassName: "border-l-[#22C55E]" },
+};
+
+const CLOSED_META = {
+  label: "Cerrada",
+  className: "bg-[#E2E8F0] text-[#334155]",
+  rowClassName: "bg-[#F8FAFC] hover:bg-[#F1F5F9]",
+  stripeClassName: "border-l-[#64748B]",
+};
+
+function getSalesStageMeta(value: unknown) {
+  return value === "IN_PROGRESS" || value === "FOLLOW_UP" || value === "SOLD" || value === "NEW"
+    ? SALES_STAGE_META[value]
+    : SALES_STAGE_META.NEW;
+}
+
+function normalizeSalesStage(value: unknown): SalesStage {
+  if (value === "FOLLOW_UP") return "IN_PROGRESS";
+  return value === "IN_PROGRESS" || value === "SOLD" || value === "NEW" ? value : "NEW";
+}
+
+const CONVERSATION_TABS: Array<{ value: ConversationTab; label: string }> = [
+  { value: "CHAT", label: "Chat" },
+  { value: "INFORMATION", label: "Información" },
+  { value: "HISTORY", label: "Historial" },
+  { value: "NOTES", label: "Notas" },
+  { value: "FILES", label: "Archivos" },
+];
+
+const DATE_FILTER_OPTIONS: Array<{ value: ConversationDateFilter; label: string }> = [
+  { value: "ALL", label: "Todo el tiempo" },
+  { value: "TODAY", label: "Hoy" },
+  { value: "7D", label: "Últimos 7 días" },
+  { value: "30D", label: "Últimos 30 días" },
+];
+
+function FilterDropdown({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  buttonClassName,
+  menuClassName,
+  align = "left",
+}: {
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  buttonClassName?: string;
+  menuClassName?: string;
+  align?: "left" | "right";
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  const selected = options.find((option) => option.value === value);
+
+  return (
+    <div ref={containerRef} className="relative min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        className={`flex w-full items-center justify-between gap-1.5 rounded-lg px-2 py-1.5 text-[10px] font-semibold outline-none transition focus-visible:ring-2 focus-visible:ring-white/90 ${buttonClassName ?? ""}`}
+      >
+        <span className="truncate">{selected?.label ?? ""}</span>
+        <MdExpandMore className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} size={15} />
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          aria-label={ariaLabel}
+          className={`absolute z-40 mt-1.5 min-w-[150px] max-h-56 overflow-y-auto rounded-xl border border-[#DCE5EA] bg-white p-1 shadow-xl shadow-[#0F172A]/15 ${
+            align === "right" ? "right-0" : "left-0"
+          } ${menuClassName ?? ""}`}
+        >
+          {options.map((option) => {
+            const active = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] font-semibold transition ${
+                  active ? "bg-[#E8FAFB] text-[#0B2E6B]" : "text-[#334155] hover:bg-[#F1F5F9]"
+                }`}
+              >
+                <span className="truncate">{option.label}</span>
+                {active ? <MdCheckCircle className="shrink-0" size={14} /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type Message = {
+  id: string;
+  role: "USER" | "ASSISTANT" | "AGENT";
+  content: string;
+  mediaType?: string | null;
+  mediaUrls?: string[];
+  deliveryStatus?: "DELIVERED" | "READ" | null;
+  externalId?: string | null;
+  replyToId?: string | null;
+  createdAt: string;
+};
+
+const PLAYABLE_MEDIA = new Set(["audio", "image", "sticker", "video", "document"]);
+
+// "📎 (audio recibido)" solo es relleno cuando el panel ya puede mostrar el archivo.
+function isMediaPlaceholder(message: Message) {
+  return Boolean(message.mediaType && PLAYABLE_MEDIA.has(message.mediaType)) && message.content.startsWith("📎 (");
+}
+
+function MessageMedia({ message }: { message: Message }) {
+  const type = message.mediaType;
+  if (!type) return null;
+  // Salientes: URLs públicas guardadas. Entrantes: el servidor las pide a WATI.
+  const sources = message.mediaUrls?.length ? message.mediaUrls : [`/api/panel/whatsapp/media/${message.id}`];
+  if (type === "audio") {
+    return <audio controls preload="none" src={sources[0]} className="mb-1.5 h-10 w-full min-w-[220px]" />;
+  }
+  if (type === "video") {
+    return <video controls preload="metadata" src={sources[0]} className="mb-1.5 max-h-72 w-full rounded-xl" />;
+  }
+  if (type === "image" || type === "sticker") {
+    return (
+      <div className={`mb-1.5 grid gap-1.5 ${sources.length > 1 ? "grid-cols-2" : ""}`}>
+        {sources.map((src) => (
+          <a key={src} href={src} target="_blank" rel="noreferrer">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={src} alt="Imagen del chat" loading="lazy" className="max-h-72 w-full rounded-xl object-cover" />
+          </a>
+        ))}
+      </div>
+    );
+  }
+  if (type === "document" && message.mediaUrls?.[0]) {
+    const url = message.mediaUrls[0];
+    const name = decodeURIComponent(url.split("/").pop() ?? "archivo");
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="mb-1.5 flex items-center gap-2 rounded-xl bg-black/5 px-3 py-2 text-xs font-semibold hover:bg-black/10"
+      >
+        <MdInsertDriveFile size={20} className="shrink-0" />
+        <span className="min-w-0 truncate">{name}</span>
+      </a>
+    );
+  }
+  return null;
+}
+
+const WHATSAPP_EMOJIS = [
+  "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😎",
+  "🙂", "😉", "😅", "😇", "🤗", "🤔", "😢", "😭",
+  "😡", "😴", "🙏", "👍", "👎", "👏", "🙌", "💪",
+  "👌", "✌️", "🤝", "👋", "❤️", "💙", "💚", "🔥",
+  "⭐", "✨", "🎉", "🎁", "✅", "❌", "⚠️", "📦",
+  "🚚", "💳", "💰", "📞", "📍", "🕒", "🛒", "🧼",
+];
+
+type WatiTemplate = {
+  name: string;
+  status: string;
+  language: string;
+  body: string;
+  bodyOriginal: string;
+  footer: string | null;
+  parameters: Array<{ name: string; defaultValue: string }>;
+};
+
+type NewConversationResult = {
+  id: string;
+  phone: string;
+  status: "ACTIVE" | "CLOSED";
+  salesStage: SalesStage;
+  notes: string | null;
+  botPaused: boolean;
+  messages: Message[];
+};
+
+const AVATAR_COLORS = [
+  "bg-[#DCFCE7] text-[#15803D]",
+  "bg-[#DBEAFE] text-[#1D4ED8]",
+  "bg-[#FCE7F3] text-[#BE185D]",
+  "bg-[#FEF3C7] text-[#B45309]",
+  "bg-[#EDE9FE] text-[#6D28D9]",
+];
+
+function avatarColor(phone: string) {
+  const sum = phone.split("").reduce((acc, character) => acc + character.charCodeAt(0), 0);
+  return AVATAR_COLORS[sum % AVATAR_COLORS.length];
+}
+
+function contactTitle(conversation: { contactName: string | null; phone: string }) {
+  return conversation.contactName?.trim() || `+${conversation.phone}`;
+}
+
+function contactInitials(name: string | null, phone: string) {
+  const clean = name?.trim();
+  if (clean) {
+    const parts = clean.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    return clean.slice(0, 2).toUpperCase();
+  }
+  return phone.slice(-2);
+}
+
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatRelative(iso: string) {
+  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (minutes < 1) return "ahora";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  return new Date(iso).toLocaleDateString("es-CO", { day: "2-digit", month: "short" });
+}
+
+function readableError(data: unknown, fallback: string) {
+  if (typeof data === "object" && data && "error" in data && typeof data.error === "string") {
+    return data.error;
+  }
+  return fallback;
+}
+
+function renderTemplatePreview(template: WatiTemplate, values: Record<string, string>) {
+  return template.bodyOriginal.replace(
+    /\{\{([^}]+)\}\}/g,
+    (_match, key: string) => values[key.trim()] || `{{${key}}}`,
+  );
+}
+
+function templateDisplayName(name: string) {
+  if (name === "presservac_combo_premium_es") return "Combo Premium Presservac";
+  return name
+    .replace(/_wati$/i, "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function templateLanguage(language: string) {
+  const normalized = language.toLowerCase();
+  if (normalized.startsWith("es") || normalized.includes("spanish")) return "Español";
+  if (normalized.startsWith("en") || normalized.includes("english")) return "Inglés";
+  return language;
+}
+
+function NewConversationModal({
+  templates,
+  templatesLoading,
+  templatesError,
+  onClose,
+  onCreated,
+}: {
+  templates: WatiTemplate[];
+  templatesLoading: boolean;
+  templatesError: string;
+  onClose: () => void;
+  onCreated: (conversation: NewConversationResult) => void;
+}) {
+  const [mode, setMode] = useState<"template" | "session">("template");
+  const [phone, setPhone] = useState("");
+  const [text, setText] = useState("");
+  const [selectedTemplateName, setSelectedTemplateName] = useState("");
+  const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
+
+  const selectedTemplate =
+    templates.find((template) => template.name === selectedTemplateName) ?? templates[0] ?? null;
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  const selectTemplate = (name: string) => {
+    const template = templates.find((item) => item.name === name);
+    setSelectedTemplateName(name);
+    setParameterValues(
+      Object.fromEntries(
+        (template?.parameters ?? []).map((parameter) => [parameter.name, parameter.defaultValue]),
+      ),
+    );
+    setTemplateMenuOpen(false);
+  };
+
+  const submit = async () => {
+    if (!phone.trim() || submitting) return;
+    setSubmitting(true);
+    setError("");
+
+    const body =
+      mode === "session"
+        ? { mode, phone, text }
+        : {
+            mode,
+            phone,
+            templateName: selectedTemplate?.name ?? "",
+            parameters: (selectedTemplate?.parameters ?? []).map((parameter) => ({
+              name: parameter.name,
+              value: parameterValues[parameter.name] ?? "",
+            })),
+          };
+
+    try {
+      const response = await fetch("/api/panel/whatsapp/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = (await response.json()) as NewConversationResult | { error?: string };
+
+      if (!response.ok) {
+        setError(readableError(data, "No fue posible enviar el mensaje."));
+        return;
+      }
+
+      onCreated(data as NewConversationResult);
+    } catch {
+      setError("No fue posible conectar con el servidor.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const templateReady =
+    selectedTemplate &&
+    selectedTemplate.parameters.every((parameter) => parameterValues[parameter.name]?.trim());
+  const canSubmit =
+    phone.trim() &&
+    (mode === "session" ? text.trim() : Boolean(templateReady)) &&
+    !submitting;
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-end justify-center bg-[#0F172A]/45 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="new-chat-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-xl flex-col overflow-hidden rounded-t-3xl border border-white/60 bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:rounded-3xl">
+        <div className="relative shrink-0 overflow-hidden rounded-t-3xl bg-gradient-to-br from-[#075E54] via-[#0B2E6B] to-[#D60517] px-5 py-5 pr-16 text-white sm:px-6">
+          <div className="pointer-events-none absolute -right-8 -top-12 h-36 w-36 rounded-full bg-white/10" />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar"
+            className="absolute right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white ring-1 ring-white/25 transition hover:bg-white/30 focus:outline-none focus:ring-2 focus:ring-white"
+          >
+            <MdClose className="pointer-events-none" size={22} />
+          </button>
+          <div className="relative flex items-center gap-3">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15 ring-1 ring-white/25">
+              <MdWhatsapp size={27} />
+            </span>
+            <div>
+              <h2 id="new-chat-title" className="text-lg font-bold">
+                Iniciar conversación
+              </h2>
+              <p className="text-sm text-white/75">Escribe a cualquier contacto desde Presservac</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="min-h-0 space-y-5 overflow-y-auto overscroll-contain p-4 sm:p-6">
+          <label className="block">
+            <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-[#475569]">
+              Número de WhatsApp
+            </span>
+            <div className="flex items-center rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] px-3 transition focus-within:border-[#D60517] focus-within:ring-4 focus-within:ring-[#D60517]/10">
+              <MdWhatsapp className="text-[#16A34A]" size={20} />
+              <input
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="Ej. 573001234567"
+                inputMode="tel"
+                autoFocus
+                className="w-full bg-transparent px-3 py-3 text-sm text-[#0F172A] outline-none"
+              />
+            </div>
+            <span className="mt-1.5 block text-[11px] text-[#64748B]">
+              Incluye indicativo de país. Si escribes 10 dígitos, usaremos Colombia (+57).
+            </span>
+          </label>
+
+          <div>
+            <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-[#475569]">
+              Tipo de envío
+            </span>
+            <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#F1F5F9] p-1">
+              <button
+                type="button"
+                onClick={() => setMode("template")}
+                className={`rounded-lg px-3 py-2.5 text-xs font-semibold transition ${
+                  mode === "template"
+                    ? "bg-white text-[#0B2E6B] shadow-sm"
+                    : "text-[#64748B] hover:text-[#334155]"
+                }`}
+              >
+                Plantilla aprobada
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("session")}
+                className={`rounded-lg px-3 py-2.5 text-xs font-semibold transition ${
+                  mode === "session"
+                    ? "bg-white text-[#0B2E6B] shadow-sm"
+                    : "text-[#64748B] hover:text-[#334155]"
+                }`}
+              >
+                Mensaje libre
+              </button>
+            </div>
+          </div>
+
+          {mode === "template" ? (
+            <div className="space-y-4">
+              <div className="flex items-start gap-2 rounded-xl border border-[#BAE6FD] bg-[#F0F9FF] p-3 text-xs text-[#075985]">
+                <MdCheckCircle className="mt-0.5 shrink-0" size={17} />
+                <p>Funciona aunque el cliente nunca haya escrito o hayan pasado más de 24 horas.</p>
+              </div>
+
+              {templatesLoading ? (
+                <div className="space-y-2">
+                  <div className="h-11 animate-pulse rounded-xl bg-[#F1F5F9]" />
+                  <div className="h-24 animate-pulse rounded-xl bg-[#F1F5F9]" />
+                </div>
+              ) : templatesError ? (
+                <div className="flex items-start gap-2 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-3 text-xs text-[#B91C1C]">
+                  <MdErrorOutline className="mt-0.5 shrink-0" size={17} />
+                  <p>{templatesError}</p>
+                </div>
+              ) : templates.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-[#CBD5E1] p-4 text-center text-xs text-[#64748B]">
+                  No hay plantillas aprobadas en WATI.
+                </div>
+              ) : (
+                <>
+                  <div className="relative">
+                    <span className="mb-2 block text-xs font-semibold text-[#334155]">Plantilla</span>
+                    <button
+                      type="button"
+                      onClick={() => setTemplateMenuOpen((open) => !open)}
+                      aria-haspopup="listbox"
+                      aria-expanded={templateMenuOpen}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-[#CBD5E1] bg-white px-3 py-3 text-left outline-none transition hover:border-[#94A3B8] focus:border-[#D60517] focus:ring-4 focus:ring-[#D60517]/10"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold text-[#0F172A]">
+                          {selectedTemplate ? templateDisplayName(selectedTemplate.name) : "Selecciona una plantilla"}
+                        </span>
+                        {selectedTemplate ? (
+                          <span className="mt-0.5 block text-[11px] text-[#64748B]">
+                            {templateLanguage(selectedTemplate.language)}
+                          </span>
+                        ) : null}
+                      </span>
+                      <MdExpandMore
+                        className={`shrink-0 text-[#64748B] transition ${templateMenuOpen ? "rotate-180" : ""}`}
+                        size={22}
+                      />
+                    </button>
+
+                    {templateMenuOpen ? (
+                      <div
+                        role="listbox"
+                        className="absolute z-30 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-[#DCE5EA] bg-white p-1.5 shadow-xl shadow-[#0F172A]/15"
+                      >
+                        {templates.map((template) => {
+                          const active = selectedTemplate?.name === template.name;
+                          return (
+                            <button
+                              key={template.name}
+                              type="button"
+                              role="option"
+                              aria-selected={active}
+                              onClick={() => selectTemplate(template.name)}
+                              className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                                active ? "bg-[#E8FAFB] text-[#0B2E6B]" : "text-[#334155] hover:bg-[#F8FAFC]"
+                              }`}
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-semibold">
+                                  {templateDisplayName(template.name)}
+                                </span>
+                                <span className="block text-[11px] opacity-70">
+                                  {templateLanguage(template.language)}
+                                </span>
+                              </span>
+                              {active ? <MdCheckCircle className="shrink-0" size={18} /> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {selectedTemplate?.parameters.map((parameter) => (
+                    <label key={parameter.name} className="block">
+                      <span className="mb-2 block text-xs font-semibold capitalize text-[#334155]">
+                        {parameter.name}
+                      </span>
+                      <input
+                        value={parameterValues[parameter.name] ?? parameter.defaultValue}
+                        onChange={(event) =>
+                          setParameterValues((current) => ({
+                            ...current,
+                            [parameter.name]: event.target.value,
+                          }))
+                        }
+                        placeholder={`Valor para ${parameter.name}`}
+                        className="w-full rounded-xl border border-[#CBD5E1] px-3 py-3 text-sm outline-none focus:border-[#D60517]"
+                      />
+                    </label>
+                  ))}
+
+                  {selectedTemplate ? (
+                    <div className="rounded-2xl bg-[#E7FFDB] p-4">
+                      <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[#15803D]">
+                        Vista previa
+                      </p>
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#14532D]">
+                        {renderTemplatePreview(selectedTemplate, parameterValues)}
+                      </p>
+                      {selectedTemplate.footer ? (
+                        <p className="mt-2 text-[11px] text-[#4D7C0F]">{selectedTemplate.footer}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-3 text-xs text-[#92400E]">
+                <MdLockClock className="mt-0.5 shrink-0" size={17} />
+                <p>Solo funciona si el cliente escribió durante las últimas 24 horas.</p>
+              </div>
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold text-[#334155]">Mensaje</span>
+                <textarea
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  rows={4}
+                  maxLength={4096}
+                  placeholder="Hola, ¿cómo podemos ayudarte?"
+                  className="w-full resize-none rounded-xl border border-[#CBD5E1] px-3 py-3 text-sm outline-none focus:border-[#D60517]"
+                />
+              </label>
+            </div>
+          )}
+
+          {error ? (
+            <div className="flex items-start gap-2 rounded-xl border border-[#FECACA] bg-[#FEF2F2] p-3 text-xs text-[#B91C1C]">
+              <MdErrorOutline className="mt-0.5 shrink-0" size={17} />
+              <p>{error}</p>
+            </div>
+          ) : null}
+
+          <div className="flex flex-col-reverse gap-2 border-t border-[#E2E8F0] pt-5 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl px-4 py-3 text-sm font-semibold text-[#64748B] transition hover:bg-[#F1F5F9] sm:py-2.5"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSubmit}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0B2E6B] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-[#0B2E6B]/20 transition hover:bg-[#086970] disabled:cursor-not-allowed disabled:opacity-45 sm:py-2.5"
+            >
+              <MdSend size={17} />
+              {submitting ? "Enviando…" : "Enviar por WhatsApp"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function WhatsappPanelPage() {
+  const confirm = useConfirm();
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [conversationStatus, setConversationStatus] = useState<"ACTIVE" | "CLOSED" | null>(null);
+  const [conversationSalesStage, setConversationSalesStage] = useState<SalesStage>("NEW");
+  const [conversationNotes, setConversationNotes] = useState("");
+  const [conversationBotPaused, setConversationBotPaused] = useState(false);
+  const [activeTab, setActiveTab] = useState<ConversationTab>("CHAT");
+  const [conversationPhone, setConversationPhone] = useState("");
+  const [draft, setDraft] = useState("");
+  const [headerMenu, setHeaderMenu] = useState<{ top: number; right: number } | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [emojiMenu, setEmojiMenu] = useState<{ bottom: number; left: number } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [attachMenu, setAttachMenu] = useState<{ bottom: number; left: number } | null>(null);
+  const pickFile = (accept: string) => {
+    const input = fileInputRef.current;
+    if (!input) return;
+    input.accept = accept;
+    setAttachMenu(null);
+    input.click();
+  };
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [messageMenu, setMessageMenu] = useState<{ message: Message; top: number; left: number } | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("ALL");
+  const [sellerFilter, setSellerFilter] = useState<string>("ALL");
+  const [dateFilter, setDateFilter] = useState<ConversationDateFilter>("ALL");
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [clearingAll, setClearingAll] = useState(false);
+  const [templates, setTemplates] = useState<WatiTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState("");
+  const [changingStage, setChangingStage] = useState(false);
+  const [creatingOdooDraft, setCreatingOdooDraft] = useState(false);
+  const [odooNotice, setOdooNotice] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [changingBotState, setChangingBotState] = useState(false);
+  const [showConversationMenu, setShowConversationMenu] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  // Conveniencia por usuario: los filtros se pueden plegar y se recuerda la elección.
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("wa-filters-open") === "0") setFiltersOpen(false);
+    } catch {}
+  }, []);
+  // Mientras anima se recorta el contenido; ya abierto, no, para que los menús de los selectores no se corten.
+  const [filtersAnimating, setFiltersAnimating] = useState(false);
+  const toggleFilters = () => {
+    setFiltersAnimating(true);
+    setFiltersOpen((open) => {
+      try {
+        window.localStorage.setItem("wa-filters-open", open ? "0" : "1");
+      } catch {}
+      return !open;
+    });
+  };
+  const onFiltersTransitionEnd = (event: React.TransitionEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && event.propertyName.startsWith("grid-template-rows")) setFiltersAnimating(false);
+  };
+  const collapsibleClass = `grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none ${
+    filtersOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+  }`;
+  const collapsibleInnerClass = `min-h-0 ${filtersOpen && !filtersAnimating ? "" : "overflow-hidden"}`;
+  const [pendingLessons, setPendingLessons] = useState(0);
+  const [incoming, setIncoming] = useState<{ id: string; name: string; text: string } | null>(null);
+  // Última fecha de mensaje visto por conversación; null = aún sin sembrar (carga inicial / cambio de vista).
+  const seenMessagesRef = useRef<Map<string, number> | null>(null);
+  const unreadTitleCountRef = useRef(0);
+  const [askNotifications, setAskNotifications] = useState(false);
+  // Ref para que refrescos en vuelo (realtime/poll) nunca pidan la lista equivocada.
+  const showArchivedRef = useRef(false);
+  showArchivedRef.current = showArchived;
+  const [hasNewMessagesBelow, setHasNewMessagesBelow] = useState(false);
+  const messageViewportRef = useRef<HTMLDivElement>(null);
+  const conversationMenuRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const renderedChatRef = useRef<{
+    conversationId: string | null;
+    lastMessageId: string | null;
+  }>({ conversationId: null, lastMessageId: null });
+  const selectedIdRef = useRef<string | null>(selectedId);
+  selectedIdRef.current = selectedId;
+  const conversationsRequestIdRef = useRef(0);
+  const messagesRequestIdRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
+
+  const loadConversations = useCallback(async () => {
+    const requestId = ++conversationsRequestIdRef.current;
+    try {
+      const response = await fetch(
+        `/api/panel/whatsapp/conversations${showArchivedRef.current ? "?archived=1" : ""}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok || requestId !== conversationsRequestIdRef.current) return;
+      const data = (await response.json()) as ConversationSummary[];
+      if (requestId === conversationsRequestIdRef.current) setConversations(data);
+    } finally {
+      if (requestId === conversationsRequestIdRef.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    seenMessagesRef.current = null;
+    void loadConversations();
+  }, [showArchived, loadConversations]);
+
+  // Aviso de mensaje entrante (como Wati): sonido, toast, notificación del navegador y contador en la pestaña.
+  useEffect(() => {
+    const seen = seenMessagesRef.current;
+    const next = new Map<string, number>();
+    const fresh: ConversationSummary[] = [];
+    for (const conversation of conversations) {
+      const last = conversation.lastMessage;
+      const time = last ? new Date(last.createdAt).getTime() : 0;
+      next.set(conversation.id, time);
+      if (!seen || !last || last.role !== "USER") continue;
+      const prev = seen.get(conversation.id);
+      const isNew = prev === undefined ? Date.now() - time < 120_000 : time > prev;
+      const watching =
+        conversation.id === selectedIdRef.current &&
+        document.visibilityState === "visible" &&
+        document.hasFocus();
+      if (isNew && !watching) fresh.push(conversation);
+    }
+    seenMessagesRef.current = next;
+    if (fresh.length === 0) return;
+
+    const top = fresh[0];
+    const name = top.contactName || top.phone;
+    const text = top.lastMessage?.content || "Nuevo mensaje";
+    setIncoming({ id: top.id, name, text });
+
+    try {
+      const ctx = new AudioContext();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+      osc.onended = () => void ctx.close();
+    } catch {
+      // Autoplay bloqueado hasta que el usuario interactúe: el toast sigue funcionando.
+    }
+
+    if (document.visibilityState !== "visible") {
+      unreadTitleCountRef.current += fresh.length;
+      document.title = `(${unreadTitleCountRef.current}) Nuevo mensaje · WhatsApp`;
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(name, { body: text, tag: "kliniu-whatsapp" });
+      }
+    }
+  }, [conversations]);
+
+  useEffect(() => {
+    if (!incoming) return;
+    const timer = window.setTimeout(() => setIncoming(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [incoming]);
+
+  useEffect(() => {
+    const baseTitle = document.title;
+    const reset = () => {
+      if (document.visibilityState !== "visible") return;
+      unreadTitleCountRef.current = 0;
+      document.title = baseTitle.replace(/^\(\d+\) Nuevo mensaje · /, "");
+    };
+    let dismissed = false;
+    try {
+      dismissed = localStorage.getItem("wa-notif-dismissed") === "1";
+    } catch {
+      // Sin storage: el aviso simplemente reaparece en cada visita.
+    }
+    if ("Notification" in window && Notification.permission === "default" && !dismissed) {
+      setAskNotifications(true);
+    }
+    document.addEventListener("visibilitychange", reset);
+    return () => {
+      document.removeEventListener("visibilitychange", reset);
+    };
+  }, []);
+
+  const loadPendingLessons = useCallback(async () => {
+    try {
+      const response = await fetch("/api/panel/whatsapp/lessons?status=PENDING", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as { counts?: { PENDING?: number } };
+      setPendingLessons(data.counts?.PENDING ?? 0);
+    } catch {
+      // El aviso es opcional: si falla, el icono queda sin contador.
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPendingLessons();
+  }, [loadPendingLessons]);
+
+  const toggleArchived = useCallback(
+    async (archived: boolean) => {
+      if (!selectedId) return;
+      const response = await fetch(`/api/panel/whatsapp/conversations/${selectedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived }),
+      });
+      if (!response.ok) {
+        setSendError("No fue posible archivar la conversación.");
+        return;
+      }
+      setConversations((current) => current.filter((conversation) => conversation.id !== selectedId));
+      setSelectedId(null);
+      setMessages([]);
+    },
+    [selectedId],
+  );
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const runBulkAction = async (action: "archive" | "unarchive" | "delete") => {
+    const ids = [...selectedIds];
+    if (ids.length === 0 || bulkBusy) return;
+    if (action === "delete") {
+      const confirmed = await confirm({
+        title: ids.length === 1 ? "Eliminar conversación" : `Eliminar ${ids.length} conversaciones`,
+        message: "Se eliminarán los chats y todos sus mensajes. Esta acción no se puede deshacer.",
+        confirmLabel: "Eliminar",
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
+    setBulkBusy(true);
+    try {
+      const response = await fetch("/api/panel/whatsapp/conversations/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, action }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        setSendError(data.error ?? "No fue posible completar la acción.");
+        return;
+      }
+      setConversations((current) => current.filter((conversation) => !selectedIds.has(conversation.id)));
+      if (selectedId && selectedIds.has(selectedId)) {
+        setSelectedId(null);
+        setMessages([]);
+      }
+      exitSelectMode();
+    } catch {
+      setSendError("No fue posible conectar con el servidor.");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const clearAllConversations = useCallback(async () => {
+    if (clearingAll) return;
+    const confirmed = await confirm({
+      title: "Vaciar todas las conversaciones",
+      message:
+        "Se eliminarán TODOS los chats y mensajes de WhatsApp de este número. Esta acción no se puede deshacer.",
+      confirmLabel: "Vaciar todo",
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setClearingAll(true);
+    try {
+      const response = await fetch("/api/panel/whatsapp/conversations", { method: "DELETE" });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        setSendError(data.error ?? "No fue posible vaciar las conversaciones.");
+        return;
+      }
+      setConversations([]);
+      setSelectedId(null);
+      setMessages([]);
+    } catch {
+      setSendError("No fue posible vaciar las conversaciones.");
+    } finally {
+      setClearingAll(false);
+    }
+  }, [clearingAll, confirm]);
+
+  const loadMessages = useCallback(async (id: string) => {    if (id !== selectedIdRef.current) return;
+    const requestId = ++messagesRequestIdRef.current;
+    const response = await fetch(`/api/panel/whatsapp/conversations/${id}/messages`, {
+      cache: "no-store",
+    });
+    if (
+      !response.ok ||
+      requestId !== messagesRequestIdRef.current ||
+      id !== selectedIdRef.current
+    ) return;
+    const data = (await response.json()) as {
+      phone: string;
+      status: "ACTIVE" | "CLOSED";
+      salesStage: SalesStage;
+      notes: string | null;
+      botPaused: boolean;
+      orderId: string | null;
+      messages: Message[];
+    };
+    if (
+      requestId !== messagesRequestIdRef.current ||
+      id !== selectedIdRef.current
+    ) return;
+    setMessages((current) => {
+      const unchanged =
+        current.length === data.messages.length &&
+        current.every((message, index) => {
+          const next = data.messages[index];
+          return (
+            message.id === next.id &&
+            message.role === next.role &&
+            message.content === next.content &&
+            message.createdAt === next.createdAt
+          );
+        });
+      return unchanged ? current : data.messages;
+    });
+    setConversationStatus(data.status);
+    setConversationSalesStage(data.orderId ? "SOLD" : normalizeSalesStage(data.salesStage));
+    setConversationNotes(data.notes ?? "");
+    setConversationBotPaused(Boolean(data.botPaused));
+    setConversationPhone(data.phone);
+  }, []);
+
+  const openNewChat = async () => {
+    setShowNewChat(true);
+    if (templates.length || templatesLoading) return;
+
+    setTemplatesLoading(true);
+    setTemplatesError("");
+    try {
+      const response = await fetch("/api/panel/whatsapp/templates", { cache: "no-store" });
+      const data = (await response.json()) as WatiTemplate[] | { error?: string };
+      if (!response.ok) {
+        setTemplatesError(readableError(data, "No fue posible cargar las plantillas."));
+        return;
+      }
+      setTemplates(data as WatiTemplate[]);
+    } catch {
+      setTemplatesError("No fue posible conectar con WATI.");
+    } finally {
+      setTemplatesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    isNearBottomRef.current = true;
+    renderedChatRef.current = {
+      conversationId: selectedId,
+      lastMessageId: null,
+    };
+    setHasNewMessagesBelow(false);
+    setShowConversationMenu(false);
+    setMessages([]);
+
+    if (selectedId) {
+      loadMessages(selectedId);
+    } else {
+      messagesRequestIdRef.current += 1;
+      setConversationStatus(null);
+      setConversationSalesStage("NEW");
+      setConversationPhone("");
+    }
+  }, [loadMessages, selectedId]);
+
+  const refreshPanel = useCallback(async () => {
+    if (document.visibilityState !== "visible") return;
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+
+    refreshInFlightRef.current = true;
+    try {
+      do {
+        refreshQueuedRef.current = false;
+        await Promise.all([
+          loadConversations(),
+          loadPendingLessons(),
+          selectedId ? loadMessages(selectedId) : Promise.resolve(),
+        ]);
+      } while (refreshQueuedRef.current);
+    } finally {
+      refreshInFlightRef.current = false;
+    }
+  }, [loadConversations, loadPendingLessons, loadMessages, selectedId]);
+
+  useRealtimeRefresh(["wati"], () => {
+    void refreshPanel();
+  });
+
+  // Realtime broadcasts are primary; this slow poll is just a safety net if a
+  // browser sleeps or temporarily loses its Supabase subscription.
+  useEffect(() => {
+    const refresh = () => {
+      void refreshPanel();
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const interval = window.setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshPanel]);
+
+  const handleChatScroll = useCallback(() => {
+    const viewport = messageViewportRef.current;
+    if (!viewport || activeTab !== "CHAT") return;
+
+    const distanceFromBottom =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    const isNearBottom = distanceFromBottom <= 96;
+    isNearBottomRef.current = isNearBottom;
+    if (isNearBottom) setHasNewMessagesBelow(false);
+  }, [activeTab]);
+
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const viewport = messageViewportRef.current;
+    if (!viewport) return;
+    isNearBottomRef.current = true;
+    setHasNewMessagesBelow(false);
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+  }, []);
+
+  const latestMessageId = messages[messages.length - 1]?.id ?? null;
+  useLayoutEffect(() => {
+    if (activeTab !== "CHAT" || !selectedId || !latestMessageId) return;
+
+    const previous = renderedChatRef.current;
+    const conversationChanged = previous.conversationId !== selectedId;
+    const firstLoadedMessage = previous.lastMessageId === null;
+    const messageAppended = previous.lastMessageId !== latestMessageId;
+
+    renderedChatRef.current = {
+      conversationId: selectedId,
+      lastMessageId: latestMessageId,
+    };
+
+    if (conversationChanged || firstLoadedMessage || isNearBottomRef.current) {
+      scrollToLatest(conversationChanged || firstLoadedMessage ? "auto" : "smooth");
+    } else if (messageAppended) {
+      setHasNewMessagesBelow(true);
+    }
+  }, [activeTab, latestMessageId, scrollToLatest, selectedId]);
+
+  useEffect(() => {
+    if (!showConversationMenu) return;
+
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (
+        conversationMenuRef.current &&
+        !conversationMenuRef.current.contains(event.target as Node)
+      ) {
+        setShowConversationMenu(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowConversationMenu(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [showConversationMenu]);
+
+  const selected = conversations.find((conversation) => conversation.id === selectedId) ?? null;
+  const selectedContactName = selected?.contactName?.trim() || null;
+  const effectiveSalesStage: SalesStage = selected?.orderId
+    ? "SOLD"
+    : conversationSalesStage;
+  const selectedIsWhatsappOrder = selected?.orderChannel === "WHATSAPP";
+  const selectedOdooStatusText = !selected
+    ? ""
+    : selected.odooSyncStatus === "SYNCED"
+      ? selectedIsWhatsappOrder
+        ? `Pedido ${selected.odooOrderName ?? ""} confirmado en Odoo; albarán de entrega generado.`
+        : `Borrador ${selected.odooOrderName ?? ""} creado en Odoo, sin confirmar.`
+      : selected.odooSyncStatus === "FAILED"
+        ? `Odoo pendiente: ${selected.odooSyncError ?? "no fue posible crear el borrador"}.`
+        : selected.orderId
+          ? selectedIsWhatsappOrder
+            ? "El pedido se creará y confirmará en Odoo automáticamente (genera albarán)."
+            : "El borrador de Odoo se creará automáticamente, sin confirmarse."
+          : selected.followUpSentAt
+            ? "Ya se envió un mensaje de seguimiento."
+            : "El seguimiento se enviará si el cliente deja de responder.";
+  // Necesita asesor: el bot está pausado (escalada de la IA o pausa manual) y el
+  // último mensaje es del cliente, o sea que nadie le ha respondido.
+  const needsAdvisor = (conversation: ConversationSummary) =>
+    conversation.status === "ACTIVE" && conversation.botPaused && conversation.lastMessage?.role === "USER";
+  const helpCount = conversations.filter(needsAdvisor).length;
+  const activeCount = conversations.filter((conversation) => conversation.status === "ACTIVE").length;
+
+  const sellers = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const conversation of conversations) {
+      if (conversation.assignedSellerId) {
+        map.set(conversation.assignedSellerId, conversation.assignedSellerName ?? "Asesor");
+      }
+    }
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [conversations]);
+  const hasUnassigned = conversations.some((conversation) => !conversation.assignedSellerId);
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const now = Date.now();
+
+  const matchesDateFilter = (conversation: ConversationSummary) => {
+    if (dateFilter === "ALL") return true;
+    const iso = conversation.lastMessage?.createdAt ?? conversation.updatedAt;
+    const time = new Date(iso).getTime();
+    if (dateFilter === "TODAY") return time >= todayStart.getTime();
+    if (dateFilter === "7D") return time >= now - 7 * 864e5;
+    return time >= now - 30 * 864e5;
+  };
+
+  const filteredConversations = conversations.filter((conversation) => {
+    if (normalizedSearch) {
+      const inName = conversation.contactName?.toLowerCase().includes(normalizedSearch) ?? false;
+      const inPhone = conversation.phone.includes(normalizedSearch);
+      const inLastMessage = conversation.lastMessage?.content.toLowerCase().includes(normalizedSearch) ?? false;
+      if (!inName && !inPhone && !inLastMessage) return false;
+    }
+
+    if (conversationFilter === "HELP" && !needsAdvisor(conversation)) return false;
+    if (conversationFilter === "NEW" && !(conversation.status === "ACTIVE" && conversation.salesStage === "NEW")) return false;
+    if (
+      conversationFilter === "ACTIVE" &&
+      !(conversation.status === "ACTIVE" && (conversation.salesStage === "IN_PROGRESS" || conversation.salesStage === "FOLLOW_UP"))
+    )
+      return false;
+    if (conversationFilter === "SOLD" && conversation.salesStage !== "SOLD") return false;
+    if (conversationFilter === "CLOSED" && !(conversation.status === "CLOSED" && conversation.salesStage !== "SOLD")) return false;
+
+    if (sellerFilter === "UNASSIGNED" && conversation.assignedSellerId) return false;
+    if (sellerFilter !== "ALL" && sellerFilter !== "UNASSIGNED" && conversation.assignedSellerId !== sellerFilter) return false;
+
+    return matchesDateFilter(conversation);
+  });
+  const visibleConversationIdsKey = filteredConversations
+    .map((conversation) => conversation.id)
+    .join(",");
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const selectedIsVisible = visibleConversationIdsKey
+      .split(",")
+      .includes(selectedId);
+    if (!selectedIsVisible) {
+      selectedIdRef.current = null;
+      setSelectedId(null);
+    }
+  }, [selectedId, visibleConversationIdsKey]);
+
+  const handleCreated = async (conversation: NewConversationResult) => {
+    setShowNewChat(false);
+    await loadConversations();
+    selectedIdRef.current = conversation.id;
+    setSelectedId(conversation.id);
+    setMessages(conversation.messages);
+    setConversationPhone(conversation.phone);
+    setConversationStatus(conversation.status);
+    setConversationSalesStage(normalizeSalesStage(conversation.salesStage));
+    setConversationNotes(conversation.notes ?? "");
+    setConversationBotPaused(Boolean(conversation.botPaused));
+    setActiveTab("CHAT");
+  };
+
+  const handleStageChange = async (salesStage: SalesStage) => {
+    if (
+      !selectedId ||
+      selected?.orderId ||
+      salesStage === effectiveSalesStage ||
+      changingStage
+    ) return;
+    setChangingStage(true);
+    setOdooNotice("");
+    try {
+      const response = await fetch(`/api/panel/whatsapp/conversations/${selectedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ salesStage }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        setOdooNotice(readableError(data, "No fue posible cambiar la etapa."));
+        return;
+      }
+      setConversationSalesStage(salesStage);
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === selectedId ? { ...conversation, salesStage } : conversation,
+        ),
+      );
+    } catch {
+      setOdooNotice("No fue posible cambiar la etapa.");
+    } finally {
+      setChangingStage(false);
+    }
+  };
+
+  const createOdooDraft = async () => {
+    if (!selectedId || creatingOdooDraft || !selected?.orderId) return;
+    setCreatingOdooDraft(true);
+    setOdooNotice("");
+    try {
+      const response = await fetch(`/api/panel/whatsapp/conversations/${selectedId}/odoo-draft`, {
+        method: "POST",
+      });
+      const data = (await response.json()) as { error?: string; odooOrderName?: string; message?: string };
+      if (!response.ok) {
+        setOdooNotice(readableError(data, "Odoo no pudo crear el borrador."));
+        return;
+      }
+      await loadConversations();
+      setOdooNotice(data.message ?? `${data.odooOrderName ?? "Pedido"} sincronizado con Odoo.`);
+    } catch {
+      setOdooNotice("No fue posible conectar con Odoo.");
+    } finally {
+      setCreatingOdooDraft(false);
+    }
+  };
+
+  const saveNotes = async () => {
+    if (!selectedId || savingNotes) return;
+    setSavingNotes(true);
+    try {
+      const response = await fetch(`/api/panel/whatsapp/conversations/${selectedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: conversationNotes }),
+      });
+      const data = (await response.json()) as { error?: string };
+      setOdooNotice(response.ok ? "Notas guardadas." : readableError(data, "No fue posible guardar las notas."));
+    } catch {
+      setOdooNotice("No fue posible guardar las notas.");
+    } finally {
+      setSavingNotes(false);
+    }
+  };
+
+  const toggleBotPaused = async () => {
+    if (!selectedId || changingBotState) return;
+    const botPaused = !conversationBotPaused;
+    const startsNewSale =
+      !botPaused && (effectiveSalesStage === "SOLD" || Boolean(selected?.orderId));
+    setChangingBotState(true);
+    setOdooNotice("");
+    try {
+      const response = await fetch(`/api/panel/whatsapp/conversations/${selectedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ botPaused }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        setOdooNotice(readableError(data, "No fue posible cambiar el estado de la IA."));
+        return;
+      }
+      setConversationBotPaused(botPaused);
+      if (startsNewSale) {
+        await Promise.all([loadMessages(selectedId), loadConversations()]);
+      } else {
+        setConversations((current) => current.map((conversation) =>
+          conversation.id === selectedId ? { ...conversation, botPaused } : conversation,
+        ));
+      }
+      setOdooNotice(
+        botPaused
+          ? "IA pausada para este contacto."
+          : startsNewSale
+            ? "Nueva venta iniciada. La IA responderá con un contexto limpio."
+            : "IA reactivada para este contacto.",
+      );
+    } catch {
+      setOdooNotice("No fue posible cambiar el estado de la IA.");
+    } finally {
+      setChangingBotState(false);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!selectedId || (!draft.trim() && !attachment) || sending) return;
+    setSending(true);
+    setSendError("");
+    const text = draft.trim();
+
+    try {
+      let response: Response;
+      if (attachment) {
+        const form = new FormData();
+        form.append("file", attachment);
+        form.append("caption", text);
+        response = await fetch(`/api/panel/whatsapp/conversations/${selectedId}/attachments`, { method: "POST", body: form });
+      } else {
+        response = await fetch(`/api/panel/whatsapp/conversations/${selectedId}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, replyToId: replyTo?.id }),
+        });
+      }
+      const data = (await response.json()) as Message | { error?: string };
+      if (!response.ok) {
+        setSendError(
+          readableError(
+            data,
+            "WATI rechazó el mensaje. Si pasaron 24 horas, inicia otro chat con una plantilla.",
+          ),
+        );
+        return;
+      }
+      setDraft("");
+      setAttachment(null);
+      setReplyTo(null);
+      isNearBottomRef.current = true;
+      setHasNewMessagesBelow(false);
+      await Promise.all([loadMessages(selectedId), loadConversations()]);
+    } catch {
+      setSendError("No fue posible conectar con el servidor.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="fixed right-4 top-4 z-[70] flex flex-col gap-2">
+      {incoming ? (
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedId(incoming.id);
+            setIncoming(null);
+          }}
+          className="flex w-[320px] max-w-[calc(100vw-2rem)] items-start gap-3 rounded-xl border border-[#DCE5EA] bg-white p-3 text-left shadow-[0_12px_40px_rgba(15,23,42,0.18)]"
+        >
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#25D366] text-white">
+            <MdNotificationsActive className="h-4 w-4" aria-hidden />
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-[#0F172A]">{incoming.name}</span>
+            <span className="line-clamp-2 text-xs text-[#475569]">{incoming.text}</span>
+          </span>
+        </button>
+      ) : null}
+      {askNotifications ? (
+        <div className="flex w-[320px] max-w-[calc(100vw-2rem)] items-start gap-3 rounded-xl border border-[#DCE5EA] bg-white p-3 shadow-[0_12px_40px_rgba(15,23,42,0.18)]">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#051C46] text-white">
+            <MdNotificationsActive className="h-4 w-4" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#0F172A]">Activar notificaciones</p>
+            <p className="text-xs text-[#475569]">Entérate de los mensajes nuevos aunque estés en otra pestaña.</p>
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAskNotifications(false);
+                  void Notification.requestPermission();
+                }}
+                className="rounded-lg bg-[#051C46] px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Activar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAskNotifications(false);
+                  try {
+                    localStorage.setItem("wa-notif-dismissed", "1");
+                  } catch {
+                    // Preferencia opcional.
+                  }
+                }}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold text-[#475569] hover:bg-[#F1F5F9]"
+              >
+                Ahora no
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      </div>
+      <main className="min-h-[calc(100dvh-3.5rem)] bg-[#F4F7F8] md:min-h-dvh md:p-4">
+      <div className="mx-auto flex h-[calc(100dvh-3.5rem)] min-h-0 max-w-[1600px] overflow-hidden border border-[#DCE5EA] bg-white shadow-sm md:h-[calc(100dvh-2rem)] md:rounded-2xl md:shadow-[0_18px_55px_rgba(15,23,42,0.08)]">
+        <aside
+          className={`w-full max-w-[360px] shrink-0 flex-col border-r border-[#DCE5EA] bg-white ${
+            selected ? "hidden md:flex" : "flex"
+          }`}
+        >
+          <div className={`bg-gradient-to-br ${showArchived ? ARCHIVED_HEADER_CLASS : FILTER_HEADER_CLASSES[conversationFilter]} px-4 pb-4 pt-5 text-white transition-colors duration-300`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white/15 ring-1 ring-white/20">
+                  <MdWhatsapp size={28} />
+                </span>
+                <h1 className="truncate text-lg font-bold leading-tight">WhatsApp</h1>
+              </div>
+              <button
+                type="button"
+                onClick={openNewChat}
+                className="flex h-11 shrink-0 items-center gap-2 rounded-2xl bg-white px-4 text-sm font-bold text-[#0B2E6B] shadow-lg shadow-black/10 transition hover:scale-105"
+                aria-label="Nuevo chat"
+                title="Nuevo chat"
+              >
+                <MdAdd size={20} />
+                Nuevo chat
+              </button>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/15 pt-3">
+              <p className="min-w-0 text-xs text-white/75">
+                {showArchived ? (
+                  <span className="whitespace-nowrap"><span className="text-lg font-bold text-white">{conversations.length}</span> archivados</span>
+                ) : (
+                  <>
+                    <span className="whitespace-nowrap"><span className="text-lg font-bold text-white">{conversations.length}</span> chats</span>
+                    <span className="mx-2 text-white/40" aria-hidden="true">•</span>
+                    <span className="whitespace-nowrap"><span className="text-lg font-bold text-white">{activeCount}</span> abiertos</span>
+                  </>
+                )}
+              </p>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Link
+                  href="/panel/whatsapp/remarketing"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 text-white transition hover:bg-white/25"
+                  aria-label="Remarketing IA"
+                  title="Remarketing IA"
+                >
+                  <MdAutorenew size={20} />
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                  aria-pressed={selectMode}
+                  className={`flex h-10 w-10 items-center justify-center rounded-xl text-white transition ${selectMode ? "bg-white/35" : "bg-white/15 hover:bg-white/25"}`}
+                  aria-label="Seleccionar chats"
+                  title="Seleccionar chats"
+                >
+                  <MdChecklist size={20} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setHeaderMenu({ top: rect.bottom + 8, right: Math.max(8, window.innerWidth - rect.right) });
+                  }}
+                  className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 text-white transition hover:bg-white/25"
+                  aria-label="Más opciones"
+                  title="Más opciones"
+                >
+                  <MdMoreHoriz size={22} />
+                  {pendingLessons > 0 ? (
+                    <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-[#F59E0B] ring-2 ring-[#0B2E6B]" />
+                  ) : null}
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center rounded-xl bg-white/15 px-3 ring-1 ring-white/15 focus-within:bg-white/20">
+              <MdSearch size={18} className="text-white/70" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Buscar conversación"
+                name="conversation-search"
+                aria-label="Buscar conversación"
+                autoComplete="off"
+                className="w-full bg-transparent px-2 py-2.5 text-xs text-white outline-none placeholder:text-white/55 focus-visible:ring-0"
+              />
+            </div>
+
+            <div className="relative mt-3 min-h-7">
+              <button
+                type="button"
+                onClick={toggleFilters}
+                aria-expanded={filtersOpen}
+                aria-label={filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
+                title={filtersOpen ? "Ocultar filtros" : "Mostrar filtros"}
+                className={`absolute left-0 top-0 flex h-7 w-7 items-center justify-center rounded-lg text-white transition hover:bg-white/25 ${filtersOpen ? "bg-white/10" : "bg-white/25"}`}
+              >
+                <MdFilterList size={16} />
+                {!filtersOpen && (showArchived || conversationFilter !== "ALL" || sellerFilter !== "ALL" || dateFilter !== "ALL") ? (
+                  <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-[#F59E0B] ring-2 ring-[#0B2E6B]" />
+                ) : null}
+              </button>
+              <p
+                aria-hidden={filtersOpen}
+                className={`pointer-events-none absolute left-9 top-0 flex h-7 items-center text-[11px] text-white/70 transition-opacity duration-300 motion-reduce:transition-none ${filtersOpen ? "opacity-0" : "opacity-100 delay-150"}`}
+              >
+                Filtros ocultos
+              </p>
+              <div className={`ml-9 ${collapsibleClass}`} onTransitionEnd={onFiltersTransitionEnd}>
+              <div className={collapsibleInnerClass} inert={!filtersOpen}>
+              <div className="grid grid-cols-3 gap-1.5">
+              {CONVERSATION_FILTERS.map((filter) => (
+                <button
+                  key={filter.value}
+                  type="button"
+                  onClick={() => {
+                    if (showArchived) {
+                      setSelectedId(null);
+                      setMessages([]);
+                    }
+                    setShowArchived(false);
+                    setConversationFilter(filter.value);
+                  }}
+                  aria-pressed={!showArchived && conversationFilter === filter.value}
+                  className={`rounded-lg px-1.5 py-1.5 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/90 ${
+                    !showArchived && conversationFilter === filter.value
+                      ? `${FILTER_ACTIVE_BUTTON_CLASSES[filter.value]} shadow-md ring-1`
+                      : "bg-white/10 text-white/75 hover:bg-white/20"
+                  }`}
+                >
+                  {filter.label}
+                  {filter.value === "HELP" && helpCount > 0 ? ` (${helpCount})` : ""}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedId(null);
+                  setMessages([]);
+                  setConversationFilter("ALL");
+                  setShowArchived((current) => !current);
+                }}
+                aria-pressed={showArchived}
+                className={`rounded-lg px-1.5 py-1.5 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/90 ${
+                  showArchived ? `${ARCHIVED_BUTTON_CLASS} shadow-md ring-1` : "bg-white/10 text-white/75 hover:bg-white/20"
+                }`}
+              >
+                Archivados
+              </button>
+              </div>
+              </div>
+              </div>
+            </div>
+
+            <div className={collapsibleClass}>
+            <div className={collapsibleInnerClass} inert={!filtersOpen}>
+            <div className="grid grid-cols-2 gap-1.5 pt-2">
+              <FilterDropdown
+                value={sellerFilter}
+                onChange={setSellerFilter}
+                ariaLabel="Filtrar por asesor"
+                buttonClassName="bg-white/90 text-[#0F172A] hover:bg-white"
+                options={[
+                  { value: "ALL", label: "Todos los asesores" },
+                  ...sellers.map(([id, name]) => ({ value: id, label: name })),
+                  ...(hasUnassigned ? [{ value: "UNASSIGNED", label: "Sin asesor" }] : []),
+                ]}
+              />
+              <FilterDropdown
+                value={dateFilter}
+                onChange={(value) => setDateFilter(value as ConversationDateFilter)}
+                ariaLabel="Filtrar por fecha"
+                buttonClassName="bg-white/90 text-[#0F172A] hover:bg-white"
+                options={DATE_FILTER_OPTIONS}
+                align="right"
+              />
+            </div>
+            </div>
+            </div>
+          </div>
+
+          {selectMode ? (
+            <div className="flex flex-wrap items-center gap-2 border-b border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 text-xs">
+              <span className="font-bold text-[#0F172A]">{selectedIds.size} seleccionados</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedIds(
+                    selectedIds.size === filteredConversations.length
+                      ? new Set()
+                      : new Set(filteredConversations.map((conversation) => conversation.id)),
+                  )
+                }
+                className="font-semibold text-[#0B2E6B] hover:underline"
+              >
+                {selectedIds.size === filteredConversations.length && selectedIds.size > 0 ? "Quitar todos" : "Seleccionar todos"}
+              </button>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || bulkBusy}
+                  onClick={() => runBulkAction(showArchived ? "unarchive" : "archive")}
+                  className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 font-semibold text-[#0B2E6B] ring-1 ring-[#CBD5E1] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {showArchived ? <MdUnarchive size={15} /> : <MdArchive size={15} />}
+                  {showArchived ? "Desarchivar" : "Archivar"}
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedIds.size === 0 || bulkBusy}
+                  onClick={() => runBulkAction("delete")}
+                  className="inline-flex items-center gap-1 rounded-lg bg-[#DC2626] px-2.5 py-1.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <MdDeleteOutline size={15} /> Eliminar
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="flex flex-col gap-3 p-4">
+                {[1, 2, 3].map((item) => (
+                  <div key={item} className="h-16 animate-pulse rounded-xl bg-[#F1F5F9]" />
+                ))}
+              </div>
+            ) : null}
+
+            {!loading && conversations.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+                <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#E7FFDB] text-[#15803D]">
+                  <MdWhatsapp size={32} />
+                </span>
+                <div>
+                  <p className="text-sm font-bold text-[#0F172A]">Tu bandeja está lista</p>
+                  <p className="mt-1 text-xs leading-relaxed text-[#64748B]">
+                    Recibe mensajes en tiempo real o inicia una conversación ahora.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={openNewChat}
+                  className="mt-2 inline-flex items-center gap-2 rounded-xl bg-[#0B2E6B] px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-[#0B2E6B]/15"
+                >
+                  <MdAdd size={17} />
+                  Nuevo mensaje
+                </button>
+                <div className="mt-3 flex w-full items-start gap-2 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3 text-left">
+                  <MdHeadsetMic className="mt-0.5 shrink-0 text-[#0B2E6B]" size={17} />
+                  <span className="text-[11px] leading-relaxed text-[#475569]">
+                    Las respuestas de clientes aparecerán automáticamente mediante el webhook.
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {!loading && conversations.length > 0 && filteredConversations.length === 0 ? (
+              <div className="px-6 py-12 text-center text-xs text-[#64748B]">
+                No encontramos conversaciones para este filtro{search ? ` y “${search}”` : ""}.
+              </div>
+            ) : null}
+
+            {filteredConversations.map((conversation) => {
+              const stageMeta =
+                conversation.status === "CLOSED" && conversation.salesStage !== "SOLD"
+                  ? CLOSED_META
+                  : getSalesStageMeta(conversation.salesStage);
+              // El chat abierto ya se está leyendo: sin contador aunque el servidor aún no lo refleje.
+              const unread = selectedId === conversation.id ? 0 : conversation.unreadCount;
+              return <button
+                key={conversation.id}
+                type="button"
+                  onClick={() => {
+                    if (selectMode) {
+                      setSelectedIds((current) => {
+                        const next = new Set(current);
+                        if (!next.delete(conversation.id)) next.add(conversation.id);
+                        return next;
+                      });
+                      return;
+                    }
+                    selectedIdRef.current = conversation.id;
+                    setSelectedId(conversation.id);
+                    setConversationStatus(conversation.status);
+                    setConversationSalesStage(
+                      conversation.orderId
+                        ? "SOLD"
+                        : normalizeSalesStage(conversation.salesStage),
+                    );
+                    setConversationBotPaused(conversation.botPaused);
+                    setConversationPhone(conversation.phone);
+                    setActiveTab("CHAT");
+                    setSendError("");
+                    setOdooNotice("");
+                  }}
+                className={`flex w-full items-start gap-3 border-b border-l-4 border-[#F1F5F9] px-3 py-3.5 text-left transition ${stageMeta.stripeClassName} ${stageMeta.rowClassName} ${
+                  selectedId === conversation.id ? "ring-2 ring-inset ring-[#0B2E6B]/45" : ""
+                }`}
+              >
+                {selectMode ? (
+                  selectedIds.has(conversation.id) ? (
+                    <MdCheckBox size={22} className="mt-2.5 shrink-0 text-[#0B2E6B]" aria-label="Seleccionado" />
+                  ) : (
+                    <MdCheckBoxOutlineBlank size={22} className="mt-2.5 shrink-0 text-[#94A3B8]" aria-label="No seleccionado" />
+                  )
+                ) : null}
+                <span
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xs font-bold ${avatarColor(conversation.phone)}`}
+                >
+                  {contactInitials(conversation.contactName, conversation.phone)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-semibold text-[#0F172A]">
+                      {contactTitle(conversation)}
+                    </span>
+                    {conversation.lastMessage ? (
+                      <span className="shrink-0 text-[10px] text-[#94A3B8]">
+                        {formatRelative(conversation.lastMessage.createdAt)}
+                      </span>
+                    ) : null}
+                  </div>
+                  {conversation.contactName ? (
+                    <p className="truncate text-[10px] text-[#94A3B8]">+{conversation.phone}</p>
+                  ) : null}
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <p className={`line-clamp-1 min-w-0 flex-1 text-xs ${unread > 0 ? "font-semibold text-[#0F172A]" : "text-[#64748B]"}`}>
+                      {conversation.lastMessage?.content ?? "Sin mensajes"}
+                    </p>
+                    {unread > 0 ? (
+                      <span
+                        aria-label={`${unread} mensajes sin leer`}
+                        className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full bg-[#EF4444] px-1 text-[10px] font-bold leading-none text-white"
+                      >
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className={`mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${stageMeta.className}`}>
+                    {stageMeta.label}
+                  </span>
+                  {conversation.followUpSentAt ? (
+                    <span className="ml-1 inline-flex rounded-full bg-[#E0F2FE] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[#0369A1]">
+                      Seguimiento enviado
+                    </span>
+                  ) : null}
+                  {conversation.botPaused ? (
+                    <span className="ml-1 inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[#B91C1C]">
+                      IA pausada
+                    </span>
+                  ) : null}
+                </div>
+              </button>;
+            })}
+          </div>
+        </aside>
+
+        <section className={`min-h-0 min-w-0 flex-1 flex-col ${selected ? "flex" : "hidden md:flex"}`}>
+          {!selected ? (
+            <div className="relative flex flex-1 flex-col items-center justify-center overflow-hidden px-6 text-center">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_#E8FBF7_0,_transparent_52%)] opacity-80" />
+              <div className="relative flex max-w-sm flex-col items-center">
+                <span className="flex h-24 w-24 items-center justify-center rounded-[28px] bg-gradient-to-br from-[#E7FFDB] to-[#D5FAF4] text-[#0B2E6B] shadow-xl shadow-[#0B2E6B]/10">
+                  <MdWhatsapp size={48} />
+                </span>
+                <p className="mt-6 text-lg font-bold text-[#0F172A]">WhatsApp conectado</p>
+                <p className="mt-2 text-sm leading-relaxed text-[#64748B]">
+                  Responde conversaciones existentes o escribe primero con una plantilla aprobada.
+                </p>
+                <button
+                  type="button"
+                  onClick={openNewChat}
+                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#0B2E6B] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-[#0B2E6B]/20 transition hover:-translate-y-0.5"
+                >
+                  <MdAdd size={19} />
+                  Iniciar conversación
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="border-b border-[#E2E8F0] bg-white">
+              <div className="flex items-center justify-between px-4 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectedIdRef.current = null;
+                      setSelectedId(null);
+                    }}
+                    className="flex h-9 w-9 items-center justify-center rounded-full text-[#64748B] hover:bg-[#F1F5F9] md:hidden"
+                    aria-label="Volver"
+                  >
+                    <MdArrowBack size={20} />
+                  </button>
+                  <span
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-bold ${avatarColor(conversationPhone)}`}
+                  >
+                    {contactInitials(selectedContactName, conversationPhone)}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-[#0F172A]">{selectedContactName ?? `+${conversationPhone}`}</p>
+                    <p className="flex items-center gap-1 text-[11px] text-[#64748B]">
+                      <span className={`h-1.5 w-1.5 rounded-full ${conversationStatus === "CLOSED" ? "bg-[#94A3B8]" : "bg-[#22C55E]"}`} />
+                      {selectedContactName ? `+${conversationPhone} · ` : ""}
+                      {getSalesStageMeta(effectiveSalesStage).label}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={openNewChat}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#9BDCDD] bg-white px-3 py-2 text-xs font-semibold text-[#0B2E6B] transition hover:bg-[#EFFDFD]"
+                    aria-label="Iniciar un nuevo chat"
+                  >
+                    <MdAdd size={16} />
+                    <span className="hidden sm:inline">Nuevo chat</span>
+                  </button>
+                  <div ref={conversationMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowConversationMenu((current) => !current)}
+                    aria-label="Más opciones"
+                    aria-haspopup="menu"
+                    aria-expanded={showConversationMenu}
+                    aria-controls="conversation-actions-menu"
+                    className="flex h-9 w-9 items-center justify-center rounded-xl text-[#64748B] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/50"
+                  >
+                    <MdMoreVert size={20} />
+                  </button>
+                  {showConversationMenu ? (
+                    <div
+                      id="conversation-actions-menu"
+                      role="menu"
+                      className="absolute right-0 top-11 z-50 w-56 overflow-hidden rounded-2xl border border-[#DCE5EA] bg-white p-1.5 shadow-xl shadow-[#0F172A]/15"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setActiveTab("INFORMATION");
+                          setShowConversationMenu(false);
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-[#475569] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/40"
+                      >
+                        <MdPerson size={16} className="text-[#0B2E6B]" />
+                        Ver información
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setActiveTab("NOTES");
+                          setShowConversationMenu(false);
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-[#475569] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/40"
+                      >
+                        <MdOutlineDescription size={16} className="text-[#0B2E6B]" />
+                        Notas internas
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setActiveTab("FILES");
+                          setShowConversationMenu(false);
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-[#475569] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/40"
+                      >
+                        <MdOutlineAssignment size={16} className="text-[#0B2E6B]" />
+                        Archivos compartidos
+                      </button>
+                      <div className="my-1 border-t border-[#F1F5F9]" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setShowConversationMenu(false);
+                          void openNewChat();
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-[#475569] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/40"
+                      >
+                        <MdAdd size={16} className="text-[#0B2E6B]" />
+                        Enviar plantilla
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setShowConversationMenu(false);
+                          void toggleBotPaused();
+                        }}
+                        disabled={changingBotState}
+                        className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/40 disabled:opacity-50 ${
+                          conversationBotPaused
+                            ? "text-[#15803D] hover:bg-[#F0FDF4]"
+                            : "text-[#B91C1C] hover:bg-[#FEF2F2]"
+                        }`}
+                      >
+                        <MdSmartToy size={16} />
+                        {conversationBotPaused ? "Reactivar IA" : "Pausar IA"}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setShowConversationMenu(false);
+                          void toggleArchived(!showArchived);
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-[#475569] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/40"
+                      >
+                        {showArchived ? <MdUnarchive size={16} className="text-[#0B2E6B]" /> : <MdArchive size={16} className="text-[#0B2E6B]" />}
+                        {showArchived ? "Restaurar chat" : "Archivar chat"}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setShowConversationMenu(false);
+                          void createOdooDraft();
+                        }}
+                        disabled={!selected.orderId || creatingOdooDraft}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-[#475569] transition-colors hover:bg-[#F1F5F9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/40 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <MdOutlineAssignment size={16} className="text-[#0B2E6B]" />
+                        {selected.odooOrderId ? "Actualizar estado Odoo" : selected.orderChannel === "WHATSAPP" ? "Confirmar en Odoo" : "Crear borrador en Odoo"}
+                      </button>
+                    </div>
+                  ) : null}
+                  </div>
+                </div>
+              </div>
+              <div
+                role="tablist"
+                aria-label="Secciones de la conversación"
+                className="flex gap-5 overflow-x-auto px-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                {CONVERSATION_TABS.map((tab) => (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    onClick={() => setActiveTab(tab.value)}
+                    role="tab"
+                    id={`conversation-tab-${tab.value.toLowerCase()}`}
+                    aria-controls={`conversation-panel-${tab.value.toLowerCase()}`}
+                    aria-selected={activeTab === tab.value}
+                    className={`shrink-0 border-b-2 py-2.5 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/50 ${
+                      activeTab === tab.value
+                        ? 'border-[#B00413] text-[#0B2E6B]'
+                        : 'border-transparent text-[#94A3B8] hover:text-[#475569]'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              </div>
+
+              <div className="relative min-h-0 flex-1">
+              <div
+                ref={messageViewportRef}
+                onScroll={handleChatScroll}
+                role="tabpanel"
+                id={`conversation-panel-${activeTab.toLowerCase()}`}
+                aria-labelledby={`conversation-tab-${activeTab.toLowerCase()}`}
+                className="h-full overflow-y-auto overscroll-contain bg-[#F4F7F6] px-4 py-5 sm:px-6"
+              >
+                {activeTab === "CHAT" ? <div className="mx-auto flex max-w-3xl flex-col gap-3">
+                  <div className="mx-auto mb-2 rounded-full bg-[#FEF3C7] px-3 py-1.5 text-[10px] font-medium text-[#92400E] shadow-sm">
+                    Los mensajes están protegidos por WhatsApp
+                  </div>
+                  {messages.map((message) => {
+                    const isCustomer = message.role === "USER";
+                    const quoted = message.replyToId ? messages.find((m) => m.id === message.replyToId) : null;
+                    return (
+                      <div
+                        key={message.id}
+                        className={`group flex items-start gap-1 ${isCustomer ? "justify-start" : "flex-row-reverse"}`}
+                      >
+                        <div
+                          className={`max-w-[82%] rounded-2xl px-4 py-2.5 text-sm shadow-sm sm:max-w-[70%] ${
+                            isCustomer
+                              ? "rounded-tl-md bg-white text-[#0F172A]"
+                              : message.role === "AGENT"
+                                ? "rounded-tr-md bg-[#D9FDD3] text-[#14532D]"
+                                : "rounded-tr-md bg-[#CFF5F1] text-[#075E54]"
+                          }`}
+                        >
+                          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold opacity-65">
+                            {message.role === "USER" ? <MdPerson size={12} /> : null}
+                            {message.role === "ASSISTANT" ? <MdSmartToy size={12} /> : null}
+                            {message.role === "AGENT" ? <MdSupportAgent size={12} /> : null}
+                            <span>
+                              {message.role === "USER"
+                                ? "Cliente"
+                                : message.role === "ASSISTANT"
+                                  ? "Asistente IA"
+                                  : "Presservac"}{" "}
+                              · {formatTime(message.createdAt)}
+                            </span>
+                            {isCustomer ? null : message.deliveryStatus === "READ" ? (
+                              <MdDoneAll size={14} className="text-[#D60517]" aria-label="Leído" />
+                            ) : message.deliveryStatus === "DELIVERED" ? (
+                              <MdDoneAll size={14} aria-label="Entregado" />
+                            ) : (
+                              <MdDone size={14} aria-label="Enviado" />
+                            )}
+                          </div>
+                          {quoted ? (
+                            <div className="mb-1.5 rounded-lg border-l-4 border-[#D60517] bg-black/5 px-2.5 py-1.5 text-xs">
+                              <p className="font-bold text-[#0B2E6B]">{quoted.role === "USER" ? "Cliente" : "Presservac"}</p>
+                              <p className="line-clamp-3 whitespace-pre-wrap opacity-80">
+                                {isMediaPlaceholder(quoted) ? "Archivo" : quoted.content}
+                              </p>
+                            </div>
+                          ) : null}
+                          <MessageMedia message={message} />
+                          {isMediaPlaceholder(message) ? null : <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>}
+                        </div>
+                        <button
+                          type="button"
+                          aria-label="Opciones del mensaje"
+                          onClick={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            setMessageMenu({
+                              message,
+                              top: rect.bottom + 4,
+                              left: Math.min(Math.max(8, rect.left - (isCustomer ? 0 : 140)), window.innerWidth - 168),
+                            });
+                          }}
+                          className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#64748B] opacity-0 transition hover:bg-white focus:opacity-100 group-hover:opacity-100"
+                        >
+                          <MdMoreVert size={18} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div> : null}
+
+                {activeTab === "INFORMATION" ? <div className="mx-auto max-w-xl rounded-2xl bg-white p-5 shadow-sm">
+                  <p className="text-xs font-bold uppercase tracking-wide text-[#64748B]">Información de la conversación</p>
+                  <dl className="mt-4 divide-y divide-[#F1F5F9] text-sm">
+                    <div className="flex items-center justify-between gap-3 py-3"><dt className="text-[#64748B]">Contacto</dt><dd className="text-right font-semibold text-[#0F172A]">{selectedContactName ?? "Sin nombre"}<span className="block text-xs font-normal text-[#94A3B8]">+{conversationPhone}</span></dd></div>
+                    <div className="flex items-center justify-between py-3"><dt className="text-[#64748B]">Etapa</dt><dd className={`rounded-full px-2.5 py-1 text-xs font-bold ${getSalesStageMeta(effectiveSalesStage).className}`}>{getSalesStageMeta(effectiveSalesStage).label}</dd></div>
+                    <div className="flex items-center justify-between py-3"><dt className="text-[#64748B]">Estado del chat</dt><dd className="font-semibold text-[#475569]">{conversationStatus === "ACTIVE" ? "Abierto" : "Cerrado"}</dd></div>
+                    <div className="flex items-center justify-between py-3"><dt className="text-[#64748B]">Pedido</dt><dd className="font-semibold text-[#475569]">{selected.orderId ? "Generado" : "Sin pedido"}</dd></div>
+                  </dl>
+                </div> : null}
+
+                {activeTab === "HISTORY" ? <div className="mx-auto max-w-3xl space-y-3">
+                  {messages.map((message) => <div key={message.id} className="rounded-xl bg-white p-4 shadow-sm"><div className="flex items-center justify-between gap-3 text-[11px]"><span className="font-bold text-[#0B2E6B]">{message.role === "USER" ? "Cliente" : message.role === "ASSISTANT" ? "Asistente IA" : "Presservac"}</span><time className="text-[#94A3B8]">{new Date(message.createdAt).toLocaleString("es-CO")}</time></div><p className="mt-2 whitespace-pre-wrap text-sm text-[#475569]">{message.content}</p></div>)}
+                </div> : null}
+
+                {activeTab === "NOTES" ? <div className="mx-auto max-w-xl rounded-2xl bg-white p-5 shadow-sm"><p className="text-sm font-bold text-[#0F172A]">Notas internas</p><p className="mt-1 text-xs text-[#64748B]">Solo visibles para el equipo de Presservac.</p><textarea aria-label="Notas internas de la conversación" name="conversation-notes" autoComplete="off" value={conversationNotes} onChange={(event) => setConversationNotes(event.target.value)} maxLength={2000} rows={8} placeholder="Ej. Cliente interesado en 2 combos para su restaurante…" className="mt-4 w-full resize-none rounded-xl border border-[#DCE5EA] bg-[#F8FAFC] p-3 text-sm outline-none focus:border-[#B00413] focus-visible:ring-2 focus-visible:ring-[#B00413]/30" /><button type="button" onClick={saveNotes} disabled={savingNotes} className="mt-3 rounded-xl bg-[#0B2E6B] px-4 py-2.5 text-xs font-bold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413]/50 disabled:opacity-50">{savingNotes ? "Guardando…" : "Guardar notas"}</button></div> : null}
+
+                {activeTab === "FILES" ? <div className="mx-auto max-w-xl rounded-2xl bg-white p-5 shadow-sm"><p className="text-sm font-bold text-[#0F172A]">Archivos compartidos</p><div className="mt-4 space-y-3">{messages.some((message) => message.content.includes("Imagen del Combo Premium enviada")) ? <a href="/presservac/acceso-cliente.jpg" target="_blank" className="flex items-center gap-3 rounded-xl bg-[#F0FDFA] p-3 text-sm font-semibold text-[#0B2E6B]"><MdOutlineDescription size={20} /> Imagen del Combo Premium</a> : null}{messages.some((message) => message.content.includes("Video del Combo Premium enviado")) ? <a href="#" target="_blank" className="flex items-center gap-3 rounded-xl bg-[#F0FDFA] p-3 text-sm font-semibold text-[#0B2E6B]"><MdOutlineDescription size={20} /> Video del Combo Premium</a> : null}{!messages.some((message) => message.content.includes("Combo Premium enviada") || message.content.includes("Combo Premium enviado")) ? <p className="rounded-xl bg-[#F8FAFC] p-4 text-sm text-[#64748B]">Todavía no se han compartido archivos en esta conversación.</p> : null}</div></div> : null}
+              </div>
+              {activeTab === "CHAT" && hasNewMessagesBelow ? (
+                <button
+                  type="button"
+                  onClick={() => scrollToLatest("smooth")}
+                  className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-[#0B2E6B] px-4 py-2 text-xs font-bold text-white shadow-lg shadow-[#0B2E6B]/25 transition-colors hover:bg-[#086970] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#B00413] focus-visible:ring-offset-2"
+                >
+                  Ver mensajes nuevos ↓
+                </button>
+              ) : null}
+              </div>
+
+              {activeTab === "CHAT" ? <div className="border-t border-[#DCE5EA] bg-white p-3 sm:px-5">
+                {sendError ? (
+                  <div className="mx-auto mb-2 flex max-w-3xl items-start gap-2 rounded-xl bg-[#FEF2F2] px-3 py-2 text-xs text-[#B91C1C]">
+                    <MdErrorOutline className="mt-0.5 shrink-0" size={16} />
+                    <span>{sendError}</span>
+                  </div>
+                ) : null}
+                {replyTo ? (
+                  <div className="mx-auto mb-2 flex max-w-3xl items-start gap-2 rounded-xl border-l-4 border-[#D60517] bg-[#F1F5F9] px-3 py-2 text-xs">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-[#0B2E6B]">Respondiendo a {replyTo.role === "USER" ? "Cliente" : "Presservac"}</p>
+                      <p className="line-clamp-2 whitespace-pre-wrap text-[#475569]">
+                        {isMediaPlaceholder(replyTo) ? "Archivo" : replyTo.content}
+                      </p>
+                    </div>
+                    <button type="button" onClick={() => setReplyTo(null)} aria-label="Cancelar respuesta" className="text-[#64748B] hover:text-[#0F172A]">
+                      <MdClose size={16} />
+                    </button>
+                  </div>
+                ) : null}
+                {attachment ? (
+                  <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 rounded-xl bg-[#F1F5F9] px-3 py-2 text-xs">
+                    <MdInsertDriveFile size={18} className="shrink-0 text-[#0B2E6B]" />
+                    <span className="min-w-0 flex-1 truncate font-semibold text-[#0F172A]">{attachment.name}</span>
+                    <button type="button" onClick={() => setAttachment(null)} aria-label="Quitar archivo" className="text-[#64748B] hover:text-[#0F172A]">
+                      <MdClose size={16} />
+                    </button>
+                  </div>
+                ) : null}
+                <div className="mx-auto flex max-w-3xl items-end gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    onChange={(event) => {
+                      setAttachment(event.target.files?.[0] ?? null);
+                      event.target.value = "";
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setAttachMenu({ bottom: window.innerHeight - rect.top + 8, left: Math.max(8, rect.left) });
+                    }}
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[#64748B] transition hover:bg-[#F1F5F9]"
+                    aria-label="Adjuntar archivo"
+                  >
+                    <MdAttachFile size={22} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setEmojiMenu({ bottom: window.innerHeight - rect.top + 8, left: Math.max(8, rect.left) });
+                    }}
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[#64748B] transition hover:bg-[#F1F5F9]"
+                    aria-label="Insertar emoji"
+                  >
+                    <MdOutlineEmojiEmotions size={22} />
+                  </button>
+                  <textarea
+                    ref={draftRef}
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    rows={1}
+                    maxLength={4096}
+                    name="whatsapp-message"
+                    aria-label="Mensaje de WhatsApp"
+                    autoComplete="off"
+                    placeholder="Escribe un mensaje…"
+                    className="max-h-32 min-h-11 flex-1 resize-none rounded-2xl border border-[#CBD5E1] bg-[#F8FAFC] px-4 py-3 text-sm outline-none transition focus:border-[#D60517] focus:bg-white focus:ring-4 focus:ring-[#D60517]/10"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSend}
+                    disabled={sending || (!draft.trim() && !attachment)}
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#0B2E6B] text-white shadow-lg shadow-[#0B2E6B]/20 transition hover:bg-[#086970] disabled:cursor-not-allowed disabled:opacity-45"
+                    aria-label="Enviar mensaje"
+                  >
+                    <MdSend size={18} />
+                  </button>
+                </div>
+                <p className="mx-auto mt-1.5 max-w-3xl px-1 text-[10px] text-[#94A3B8]">
+                  Mensaje libre disponible durante la ventana de atención de 24 horas.
+                </p>
+              </div> : null}
+            </>
+          )}
+        </section>
+        {headerMenu && typeof document !== "undefined"
+          ? createPortal(
+              <>
+                <div className="fixed inset-0 z-[90]" onClick={() => setHeaderMenu(null)} />
+                <div
+                  style={{ top: headerMenu.top, right: headerMenu.right }}
+                  className="fixed z-[100] w-60 rounded-2xl border border-[#E2E8F0] bg-white p-1.5 text-sm shadow-xl"
+                >
+                  <Link
+                    href="/panel/whatsapp/remarketing"
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[#334155] hover:bg-[#F1F5F9]"
+                  >
+                    <MdAutorenew size={20} />
+                    <span className="flex-1">Remarketing y plantillas</span>
+                  </Link>
+                  <Link
+                    href="/panel/whatsapp/lecciones"
+                    className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-[#334155] hover:bg-[#F1F5F9]"
+                  >
+                    <MdPsychology size={20} />
+                    <span className="flex-1">Lecciones de la IA</span>
+                    {pendingLessons > 0 ? (
+                      <span className="rounded-full bg-[#F59E0B] px-2 py-0.5 text-[10px] font-bold text-white">
+                        {pendingLessons > 99 ? "99+" : pendingLessons}
+                      </span>
+                    ) : null}
+                  </Link>
+                  <div className="my-1 border-t border-[#E2E8F0]" />
+                  <button
+                    type="button"
+                    disabled={clearingAll || conversations.length === 0}
+                    onClick={() => {
+                      setHeaderMenu(null);
+                      void clearAllConversations();
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left font-semibold text-[#DC2626] hover:bg-[#FEF2F2] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <MdDeleteOutline size={20} /> Vaciar conversaciones
+                  </button>
+                </div>
+              </>,
+              document.body,
+            )
+          : null}
+        {attachMenu && typeof document !== "undefined"
+          ? createPortal(
+              <>
+                <div className="fixed inset-0 z-[90]" onClick={() => setAttachMenu(null)} />
+                <div
+                  style={{ bottom: attachMenu.bottom, left: attachMenu.left }}
+                  className="fixed z-[100] w-52 rounded-xl border border-[#E2E8F0] bg-white py-1 text-sm shadow-xl"
+                >
+                  <button
+                    type="button"
+                    onClick={() => pickFile(".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,application/pdf")}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-[#0F172A] hover:bg-[#F1F5F9]"
+                  >
+                    <MdInsertDriveFile size={20} className="text-[#7C3AED]" /> Documento
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => pickFile("image/jpeg,image/png,image/webp")}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-[#0F172A] hover:bg-[#F1F5F9]"
+                  >
+                    <MdImage size={20} className="text-[#0B2E6B]" /> Fotos
+                  </button>
+                </div>
+              </>,
+              document.body,
+            )
+          : null}
+        {emojiMenu && typeof document !== "undefined"
+          ? createPortal(
+              <>
+                <div className="fixed inset-0 z-[90]" onClick={() => setEmojiMenu(null)} />
+                <div
+                  style={{ bottom: emojiMenu.bottom, left: emojiMenu.left }}
+                  className="fixed z-[100] grid w-72 grid-cols-8 gap-0.5 rounded-xl border border-[#E2E8F0] bg-white p-2 shadow-xl"
+                >
+                  {WHATSAPP_EMOJIS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => {
+                        const el = draftRef.current;
+                        const start = el?.selectionStart ?? draft.length;
+                        const end = el?.selectionEnd ?? draft.length;
+                        setDraft((current) => current.slice(0, start) + emoji + current.slice(end));
+                        setEmojiMenu(null);
+                        requestAnimationFrame(() => {
+                          el?.focus();
+                          el?.setSelectionRange(start + emoji.length, start + emoji.length);
+                        });
+                      }}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-xl hover:bg-[#F1F5F9]"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </>,
+              document.body,
+            )
+          : null}
+        {messageMenu && typeof document !== "undefined"
+          ? createPortal(
+              <>
+                <div className="fixed inset-0 z-[90]" onClick={() => setMessageMenu(null)} />
+                <div
+                  style={{ top: messageMenu.top, left: messageMenu.left }}
+                  className="fixed z-[100] w-40 rounded-xl border border-[#E2E8F0] bg-white py-1 text-sm shadow-xl"
+                >
+                  <button
+                    type="button"
+                    disabled={!messageMenu.message.externalId}
+                    title={messageMenu.message.externalId ? undefined : "Este mensaje no se puede citar en WhatsApp"}
+                    onClick={() => {
+                      setReplyTo(messageMenu.message);
+                      setMessageMenu(null);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#0F172A] hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <MdReply size={18} /> Responder
+                  </button>
+                </div>
+              </>,
+              document.body,
+            )
+          : null}
+
+        <aside className={`hidden w-[280px] shrink-0 overflow-y-auto border-l border-[#E2E8F0] bg-[#F8FAFC] p-3 xl:block ${selected ? '' : 'opacity-50'}`}>
+          {selected ? (
+            <div className="space-y-3">
+              <section className="rounded-2xl border border-[#E2E8F0] bg-white p-4 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748B]">Contacto</p>
+                <div className="mt-3 flex items-center gap-2.5">
+                  <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-bold ${avatarColor(conversationPhone)}`}>
+                    {contactInitials(selectedContactName, conversationPhone)}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-[#0F172A]">{selectedContactName ?? `+${conversationPhone}`}</p>
+                    <p className="mt-0.5 flex items-center gap-1 text-[10px] text-[#16A34A]"><MdWhatsapp size={12} /> {selectedContactName ? `+${conversationPhone}` : "WhatsApp"}</p>
+                  </div>
+                </div>
+                <dl className="mt-4 space-y-2 border-t border-[#F1F5F9] pt-3 text-[11px]">
+                  <div className="space-y-1.5"><dt className="text-[#94A3B8]">Etapa comercial</dt><dd><select aria-label="Etapa comercial" value={effectiveSalesStage} onChange={(event) => handleStageChange(event.target.value as SalesStage)} disabled={changingStage || Boolean(selected.orderId)} className="w-full rounded-lg border border-[#DCE5EA] bg-[#F8FAFC] px-2 py-1.5 text-[11px] font-semibold text-[#334155] outline-none focus:border-[#B00413] focus-visible:ring-2 focus-visible:ring-[#B00413]/30 disabled:cursor-not-allowed disabled:opacity-60"><option value="NEW">Nuevo</option><option value="IN_PROGRESS">En conversación</option><option value="SOLD">Vendido</option></select>{selected.orderId ? <p className="mt-1 text-[9px] text-[#16A34A]">Etapa bloqueada por pedido generado.</p> : null}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-[#94A3B8]">Vendedor</dt><dd className="font-semibold text-[#475569]">{selected.assignedSellerName ?? 'Sin asignar'}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-[#94A3B8]">Chat</dt><dd className="font-semibold text-[#475569]">{conversationStatus === 'ACTIVE' ? 'Abierto' : 'Cerrado'}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-[#94A3B8]">Origen</dt><dd className="font-medium text-[#475569]">WhatsApp</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-[#94A3B8]">Última actividad</dt><dd className="font-medium text-[#475569]">{selected.lastMessage ? formatRelative(selected.lastMessage.createdAt) : 'Sin actividad'}</dd></div>
+                </dl>
+              </section>
+
+              <section className="rounded-2xl border border-[#E2E8F0] bg-white p-3 shadow-sm">
+                <p className="px-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748B]">Herramientas</p>
+                <div className="mt-2 divide-y divide-[#F1F5F9]">
+                  <button type="button" onClick={openNewChat} className="flex w-full items-center gap-2.5 px-1 py-3 text-left text-xs font-medium text-[#475569] transition hover:text-[#0B2E6B]"><MdOutlineDescription size={16} className="text-[#0B2E6B]" /> Enviar plantilla</button>
+                  <button type="button" onClick={toggleBotPaused} disabled={changingBotState} className={`flex w-full items-center gap-2.5 px-1 py-3 text-left text-xs font-semibold transition disabled:opacity-50 ${conversationBotPaused ? "text-[#15803D] hover:text-[#166534]" : "text-[#B91C1C] hover:text-[#991B1B]"}`}><MdSmartToy size={16} /> {changingBotState ? "Actualizando…" : conversationBotPaused ? "Reactivar IA" : "Pausar IA"}</button>
+                  <button type="button" onClick={createOdooDraft} disabled={!selected.orderId || creatingOdooDraft} className="flex w-full items-center gap-2.5 px-1 py-3 text-left text-xs font-medium text-[#475569] transition hover:text-[#0B2E6B] disabled:cursor-not-allowed disabled:opacity-45"><MdOutlineAssignment size={16} className="text-[#0B2E6B]" /> {creatingOdooDraft ? 'Creando borrador…' : 'Crear borrador en Odoo'}</button>
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-[#E2E8F0] bg-white p-4 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#64748B]">Conversación</p>
+                {selected.orderId ? (
+                  <div className="mt-3 rounded-xl border border-[#CCFBF1] bg-[#F0FDFA] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold text-[#0C6368]">Pedido vinculado</p>
+                      <span className="whitespace-nowrap rounded-full border border-[#99F0EC] bg-white px-2 py-0.5 text-[10px] font-bold text-[#0B2E6B]">
+                        {selected.odooOrderName ?? `#${selected.orderId.slice(-6)}`}
+                      </span>
+                    </div>
+                    {selected.orderItems.length > 0 ? (
+                      <ul className="mt-2.5 space-y-1.5">
+                        {selected.orderItems.map((item, index) => (
+                          <li key={index} className="flex items-center gap-2 text-[11px]">
+                            {item.image ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={item.image} alt={item.name} className="h-8 w-8 shrink-0 rounded-md border border-[#CCFBF1] object-cover" />
+                            ) : null}
+                            <span className="min-w-0 flex-1 truncate text-[#334155]">{item.name}</span>
+                            <span className="shrink-0 font-semibold text-[#64748B]">× {item.quantity}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {selected.orderSubtotal != null ? (
+                      <div className="mt-2.5 flex items-baseline justify-between border-t border-[#CCFBF1] pt-2.5">
+                        <span className="text-[10px] font-semibold text-[#64748B]">Total</span>
+                        <span className="text-sm font-extrabold text-[#0C6368]">${selected.orderSubtotal.toLocaleString("es-CO")}</span>
+                      </div>
+                    ) : null}
+                    <p className="mt-2.5 text-[10px] leading-relaxed text-[#64748B]">{selectedOdooStatusText}</p>
+                    {odooNotice ? <p className="mt-2 rounded-lg bg-white px-2 py-1.5 text-[10px] font-medium text-[#0B2E6B]">{odooNotice}</p> : null}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl bg-[#F8FAFC] p-3">
+                    <p className="text-[11px] font-semibold text-[#334155]">Sin pedido vinculado</p>
+                    <p className="mt-1 text-[10px] leading-relaxed text-[#64748B]">{selectedOdooStatusText}</p>
+                    {odooNotice ? <p className="mt-2 rounded-lg bg-[#EFFDFD] px-2 py-1.5 text-[10px] font-medium text-[#0B2E6B]">{odooNotice}</p> : null}
+                  </div>
+                )}
+              </section>
+            </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center px-5 text-center">
+              <MdPerson size={28} className="text-[#CBD5E1]" />
+              <p className="mt-3 text-xs font-semibold text-[#64748B]">Selecciona un contacto</p>
+            </div>
+          )}
+        </aside>
+      </div>
+      </main>
+
+      {odooNotice ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-20 right-4 z-[60] max-w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-[#BFE8E6] bg-white px-4 py-3 text-xs font-semibold text-[#0B2E6B] shadow-xl shadow-[#0F172A]/15 md:bottom-6"
+        >
+          {odooNotice}
+        </div>
+      ) : null}
+
+      {showNewChat ? (
+        <NewConversationModal
+          templates={templates}
+          templatesLoading={templatesLoading}
+          templatesError={templatesError}
+          onClose={() => setShowNewChat(false)}
+          onCreated={handleCreated}
+        />
+      ) : null}
+    </>
+  );
+}

@@ -1,0 +1,48 @@
+import { requirePermission } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
+import { getClientIp } from "@/lib/rate-limit";
+import { prisma } from "@/lib/prisma";
+import { approveQuotation } from "@/lib/panel";
+import { createNotification } from "@/lib/notifications";
+import { broadcastPanelUpdate } from "@/lib/realtime";
+
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const access = await requirePermission("MODULE_COTIZACIONES", "edit");
+  if (!access.ok) return Response.json({ error: "No autorizado" }, { status: access.status });
+  const { session } = access;
+  if (!prisma) return Response.json({ error: "DB no disponible" }, { status: 503 });
+
+  const { id } = await params;
+  const quotation = await prisma.quotation.findUnique({ where: { id } });
+  if (!quotation) return Response.json({ error: "Cotización no encontrada" }, { status: 404 });
+  if (session.role !== "ADMIN" && quotation.sellerId !== session.userId) {
+    return Response.json({ error: "Sin permiso" }, { status: 403 });
+  }
+
+  try {
+    const updated = await approveQuotation(id);
+    await logAudit({
+      actorId: session.userId, actorEmail: access.user.email, action: "quotation.approve", entity: "quotation", entityId: id,
+      meta: { name: quotation.number }, ip: getClientIp(request),
+    });
+
+    createNotification({
+      eventKey: "quotation.approved",
+      title: "Cotización aprobada",
+      detail: `La cotización ha sido aprobada`,
+      href: "/panel/cotizaciones",
+      targetUserId: quotation.sellerId,
+      createdById: session.userId,
+      metadata: { quotationId: id },
+    }).catch(() => {});
+
+    broadcastPanelUpdate("quotations").catch(() => {});
+
+    return Response.json(updated);
+  } catch (e) {
+    if (e instanceof Error && e.message === "INVALID_TRANSITION") {
+      return Response.json({ error: "Solo se puede aprobar desde enviada" }, { status: 409 });
+    }
+    return Response.json({ error: "Error interno" }, { status: 500 });
+  }
+}
